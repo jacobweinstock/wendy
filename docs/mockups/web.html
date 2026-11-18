@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>wendy — web UI wireframes</title>
+<style>
+  :root { --ink:#222; --mute:#777; --line:#cfcfcf; --soft:#f6f6f6;
+          --pass:#2e7d32; --fail:#c62828; --err:#b7791f; --run:#1565c0; --pause:#8e24aa; --skip:#888; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; color:var(--ink); background:#e9e9e9; }
+  header.doc { max-width:1240px; margin:24px auto 0; padding:0 20px; }
+  header.doc h1 { margin:0 0 4px; font-size:22px; }
+  header.doc p { margin:4px 0; color:#444; max-width:900px; }
+  nav.toc { max-width:1240px; margin:8px auto; padding:0 20px; display:flex; flex-wrap:wrap; gap:6px; }
+  nav.toc a { font-size:12px; padding:3px 8px; border:1px solid #bbb; border-radius:12px; background:#fff; color:#333; text-decoration:none; }
+  section.screen { max-width:1240px; margin:28px auto; padding:0 20px; }
+  section.screen > h2 { font-size:16px; margin:0 0 8px; }
+  .frame { background:#fff; border:1px solid #999; border-radius:8px; overflow:hidden; box-shadow:0 2px 10px rgba(0,0,0,.08); position:relative; min-width:1100px; }
+  section.screen { overflow-x:auto; }
+  .logo, .top a.tab { white-space:nowrap; }
+  .chrome { background:#ececec; border-bottom:1px solid #ccc; padding:6px 10px; display:flex; gap:8px; align-items:center; font-size:12px; color:#555; }
+  .chrome .dots { letter-spacing:3px; color:#bbb; }
+  .chrome .url { flex:1; background:#fff; border:1px solid #d5d5d5; border-radius:4px; padding:2px 8px; font-family:ui-monospace, Menlo, monospace; }
+  .top { display:flex; align-items:center; gap:4px; padding:10px 18px; border-bottom:1px solid var(--line); }
+  .logo { font-weight:700; margin-right:18px; }
+  .top a.tab { padding:6px 12px; border-radius:6px; color:#444; text-decoration:none; }
+  .top a.tab.on { background:#222; color:#fff; }
+  .top .sp { flex:1; }
+  .badge { display:inline-block; min-width:18px; padding:0 5px; border-radius:9px; background:var(--fail); color:#fff; font-size:11px; text-align:center; margin-left:4px; }
+  .crumbs { padding:10px 18px 0; color:var(--mute); font-size:13px; }
+  .page { padding:16px 18px 20px; }
+  .row { display:flex; gap:16px; align-items:flex-start; }
+  .col { flex:1; min-width:0; }
+  .card { border:1px solid var(--line); border-radius:8px; padding:12px 14px; background:#fff; }
+  .card + .card { margin-top:12px; }
+  .card h3 { margin:0 0 8px; font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--mute); }
+  .btn { display:inline-block; padding:6px 12px; border:1px solid #888; border-radius:6px; background:#fff; color:#222; font-size:13px; cursor:default; white-space:nowrap; }
+  .btn.primary { background:#222; color:#fff; border-color:#222; }
+  .btn.danger { border-color:var(--fail); color:var(--fail); }
+  .btn.sm { padding:2px 8px; font-size:12px; }
+  .chip { display:inline-block; padding:1px 8px; border-radius:10px; font-size:12px; border:1px solid currentColor; white-space:nowrap; }
+  .pass { color:var(--pass); } .fail { color:var(--fail); } .err { color:var(--err); }
+  .run { color:var(--run); } .pause { color:var(--pause); } .skip { color:var(--skip); }
+  .mute { color:var(--mute); } .mono { font-family:ui-monospace, Menlo, monospace; font-size:12.5px; }
+  .bar { height:8px; background:#e5e5e5; border-radius:4px; overflow:hidden; }
+  .bar > i { display:block; height:100%; background:var(--run); }
+  table { border-collapse:collapse; width:100%; }
+  th, td { text-align:left; padding:7px 8px; border-bottom:1px solid #eee; vertical-align:top; }
+  td:first-child { white-space:nowrap; }
+  th { font-size:12px; color:var(--mute); font-weight:600; }
+  tr.sel td { background:#f1f5fb; }
+  .profile { display:flex; align-items:center; gap:10px; border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:8px; }
+  .profile.sel { border-color:#222; box-shadow:inset 3px 0 0 #222; }
+  .profile .name { font-weight:600; min-width:170px; }
+  .profile .desc { flex:1; color:var(--mute); font-size:13px; }
+  .tree { font-size:13px; }
+  .tree div { padding:3px 6px; border-radius:4px; display:flex; gap:6px; }
+  .tree div.sel { background:#f1f5fb; outline:1px solid #c9d7ee; }
+  .tree .t { margin-left:auto; color:var(--mute); font-family:ui-monospace, Menlo, monospace; font-size:12px; }
+  .log { background:var(--soft); border:1px solid #e3e3e3; border-radius:6px; padding:10px; font-family:ui-monospace, Menlo, monospace; font-size:12.5px; white-space:pre; overflow:auto; }
+  .subtabs { display:flex; gap:2px; border-bottom:1px solid var(--line); margin-bottom:10px; }
+  .subtabs span { padding:6px 12px; font-size:13px; color:#555; }
+  .subtabs span.on { border-bottom:2px solid #222; color:#222; font-weight:600; }
+  .field { display:flex; gap:12px; align-items:center; margin:8px 0; }
+  .field label { width:130px; color:#555; font-size:13px; }
+  .input { border:1px solid #bbb; border-radius:5px; padding:5px 8px; min-width:240px; background:#fff; }
+  .seg { display:inline-flex; border:1px solid #bbb; border-radius:6px; overflow:hidden; }
+  .seg span { padding:4px 10px; font-size:13px; border-right:1px solid #bbb; }
+  .seg span:last-child { border-right:0; }
+  .seg span.on { background:#222; color:#fff; }
+  .check { margin-right:12px; font-size:13px; }
+  .failcard { border:2px solid var(--fail); border-radius:8px; padding:14px 16px; background:#fff7f7; }
+  .failcard h3 { margin:0 0 6px; color:var(--fail); font-size:15px; }
+  .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+  .grid td.c { text-align:center; font-size:16px; }
+  .facet { display:inline-flex; gap:4px; align-items:center; margin-right:14px; font-size:12px; color:#555; }
+  .note { margin-top:10px; background:#fff8c5; border:1px solid #e6d77a; border-radius:6px; padding:8px 12px; font-size:13px; }
+  .note b { font-weight:600; }
+  .overlay { position:absolute; inset:0; background:rgba(0,0,0,.35); display:flex; justify-content:center; align-items:flex-start; padding-top:90px; }
+  .palette { width:560px; background:#fff; border-radius:10px; box-shadow:0 10px 40px rgba(0,0,0,.3); overflow:hidden; }
+  .palette .q { padding:12px 14px; border-bottom:1px solid #eee; font-size:15px; }
+  .palette .it { padding:8px 14px; display:flex; justify-content:space-between; font-size:13px; }
+  .palette .it.sel { background:#f1f5fb; }
+  .kbd { font-family:ui-monospace, Menlo, monospace; font-size:11px; border:1px solid #bbb; border-bottom-width:2px; border-radius:4px; padding:0 4px; color:#555; background:#fafafa; }
+  .err-line { font-family:ui-monospace, Menlo, monospace; font-size:12.5px; padding:4px 0 4px 18px; }
+  .empty { text-align:center; padding:40px 20px; }
+</style>
+</head>
+<body>
+
+<header class="doc">
+  <h1>wendy: web UI wireframes</h1>
+  <p><b>Superseded by <a href="./web/index.html">mockup/</a>, which the web UI now follows.</b> These are the earlier screens and words, kept for reference.</p>
+  <p>Low-fidelity wireframes. The web UI has the same screens, wording, statuses and actions as the TUI (<a href="./tui.md">tui.md</a>), so learning one means you know the other. It is built with templ + htmx; live parts (progress, logs, status) update over SSE.</p>
+  <p>Statuses: <span class="chip pass">✓ passed</span> <span class="chip fail">✗ failed</span> <span class="chip err">! errored</span> <span class="chip run">● running</span> <span class="chip skip">○ waiting</span> <span class="chip pause">‖ paused</span> <span class="chip skip">– not run</span>. <b>failed</b> means Tinkerbell or CAPT misbehaved; <b>errored</b> means wendy or the host broke.</p>
+  <p>Global keys work in the web UI too: <span class="kbd">/</span> filter, <span class="kbd">⌘K</span> or <span class="kbd">:</span> command palette, <span class="kbd">n</span> new run, <span class="kbd">?</span> help.</p>
+</header>
+<nav class="toc">
+  <a href="#first">1 First launch</a><a href="#home">2 Home</a><a href="#new">3 New run</a><a href="#live">4 Run: live</a>
+  <a href="#failed">5 Run: failed</a><a href="#grid">6 Run: grid</a><a href="#runs">7 Runs</a><a href="#catalog">8 Catalog</a>
+  <a href="#envs">9 Environments</a><a href="#config">10 Config</a><a href="#palette">11 Command palette</a>
+</nav>
+
+<!-- 1 FIRST LAUNCH -->
+<section class="screen" id="first">
+  <h2>1. First launch (no config)</h2>
+  <div class="frame">
+    <div class="chrome"><span class="dots">●●●</span><span class="url">http://127.0.0.1:7600/</span></div>
+    <div class="top"><span class="logo">◆ wendy</span><a class="tab on">Home</a><a class="tab">Runs</a><a class="tab">Catalog</a><a class="tab">Environments</a><a class="tab">Config</a><span class="sp"></span><span class="btn primary">＋ New run</span></div>
+    <div class="page">
+      <div class="empty">
+        <h2 style="margin:0 0 6px">Welcome to wendy</h2>
+        <p class="mute">No config found yet. wendy looked in <span class="mono">~/.config/wendy/</span> and <span class="mono">./.wendy/</span>.</p>
+        <div class="profile sel" style="max-width:720px;margin:22px auto 8px;text-align:left">
+          <span class="name">quickstart</span><span class="desc">Playground defaults · kind + libvirt · smoke suite · about 15 min</span><span class="btn primary">Run</span>
+        </div>
+        <p>or <span class="btn sm">Create ./.wendy/wendy.cue</span> <span class="mute">a commented starter file; wendy reloads it as you edit</span></p>
+        <p style="margin-top:22px"><b>Host check</b>&nbsp; <span class="pass">✓ docker</span> &nbsp; <span class="pass">✓ libvirt</span> &nbsp; <span class="pass">✓ /dev/kvm</span> &nbsp; <span class="fail">✗ git</span> <span class="mute">(only needed for source builds)</span></p>
+      </div>
+    </div>
+  </div>
+  <div class="note"><b>Intent:</b> zero setup to a first green run. Problems are shown before you start, not ten minutes in.</div>
+</section>
+
+<!-- 2 HOME -->
+<section class="screen" id="home">
+  <h2>2. Home</h2>
+  <div class="frame">
+    <div class="chrome"><span class="dots">●●●</span><span class="url">http://127.0.0.1:7600/</span></div>
+    <div class="top"><span class="logo">◆ wendy</span><a class="tab on">Home</a><a class="tab">Runs</a><a class="tab">Catalog</a><a class="tab">Environments</a><a class="tab">Config</a><span class="sp"></span><span class="chip run">● 1 running</span>&nbsp;&nbsp;<span class="btn primary">＋ New run</span></div>
+    <div class="page row">
+      <div class="col" style="flex:1.15">
+        <div class="card">
+          <h3>Start a run</h3>
+          <div class="profile sel"><span class="name">pr-check</span><span class="desc">colocated-ipv4-netboot-direct · smoke</span><span class="chip pass">✓ 14m</span><span class="btn primary">Run</span><span class="btn">Edit &amp; run</span></div>
+          <div class="profile"><span class="name">my-branch</span><span class="desc">local tinkerbell + CAPT checkouts · smoke, nightly</span><span class="chip fail">✗ 41m</span><span class="btn">Run</span></div>
+          <div class="profile"><span class="name">ci-matrix</span><span class="desc">8 combos (*-direct) · smoke · parallel 2</span><span class="chip err">! 1h52</span><span class="btn">Run</span></div>
+          <div class="profile"><span class="name">upgrade-from-release</span><span class="desc">latest release → my checkouts · upgrades</span><span class="chip skip">never run</span><span class="btn">Run</span></div>
+          <div class="profile" style="border-style:dashed"><span class="name">＋ Custom run…</span><span class="desc">pick an environment or matrix, suites and options</span></div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card">
+          <h3>Active</h3>
+          <div class="row" style="align-items:center"><span class="run">●</span><b>r-0412</b> my-branch <span class="mute">lifecycle › scale-out</span><span class="sp" style="flex:1"></span><span class="mono">22:14</span></div>
+          <div class="bar" style="margin:8px 0 2px"><i style="width:43%"></i></div><div class="mute" style="font-size:12px">9 of 21 steps · about 19 min left</div>
+        </div>
+        <div class="card" style="border-color:var(--pause)">
+          <h3 class="pause">Needs attention</h3>
+          <div><span class="pause">‖</span> <b>r-0410</b> my-branch: paused on failure, environment kept</div>
+          <div class="actions"><span class="btn sm">Inspect</span><span class="btn sm">Copy KUBECONFIG export</span></div>
+        </div>
+        <div class="card">
+          <h3>Recent</h3>
+          <table>
+            <tr><td class="pass">✓</td><td>r-0411</td><td>pr-check</td><td class="mono">14m02</td><td class="mute">2h ago</td></tr>
+            <tr><td class="fail">✗</td><td>r-0410</td><td>my-branch</td><td class="mono">41m10</td><td class="mute">5h ago</td></tr>
+            <tr><td class="err">!</td><td>r-0409</td><td>ci-matrix <span class="mute">7✓ 1!</span></td><td class="mono">1h52</td><td class="mute">1d ago</td></tr>
+            <tr><td class="pass">✓</td><td>r-0408</td><td>pr-check</td><td class="mono">13m51</td><td class="mute">1d ago</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="note"><b>Intent:</b> left is "what can I start", right is "what's happening / what needs me". Each profile shows its last result, so you know where you stand at a glance.</div>
+</section>
+
+<!-- 3 NEW RUN -->
+<section class="screen" id="new">
+  <h2>3. New run (Custom run, Edit &amp; run, or "Run this…" from the Catalog)</h2>
+  <div class="frame">
+    <div class="chrome"><span class="dots">●●●</span><span class="url">http://127.0.0.1:7600/runs/new?from=pr-check</span></div>
+    <div class="top"><span class="logo">◆ wendy</span><a class="tab">Home</a><a class="tab on">Runs</a><a class="tab">Catalog</a><a class="tab">Environments</a><a class="tab">Config</a><span class="sp"></span></div>
+    <div class="crumbs">Runs › New run · based on <b>pr-check</b></div>
+    <div class="page row">
+      <div class="col">
+        <div class="card">
+          <h3>What</h3>
+          <div class="field"><label>Target</label><span class="seg"><span class="on">Matrix</span><span>Environment</span></span></div>
+          <div class="field"><label>Matrix</label><span class="input">playground ▾</span></div>
+          <div class="field"><label>Combinations</label><span class="input mono">colocated-ipv4-*</span><span class="mute">4 of 16 match</span></div>
+          <div class="field"><label></label><span class="mute" style="font-size:12px">or pick by axis:&nbsp;
+            <span class="facet">topology <span class="chip">colocated</span> <span class="chip skip">external</span></span>
+            <span class="facet">ipFamily <span class="chip">ipv4</span> <span class="chip skip">ipv6</span></span></span></div>
+          <div class="field"><label>Suites</label><span class="check">☑ smoke</span><span class="check">☑ lifecycle</span><span class="check">☐ upgrades</span></div>
+          <div class="field"><label>Label filter</label><span class="input mono mute">optional, e.g. !mirror</span></div>
+        </div>
+        <div class="card">
+          <h3>How</h3>
+          <div class="field"><label>Parallel</label><span class="input" style="min-width:60px">2</span></div>
+          <div class="field"><label>Keep environment</label><span class="seg"><span>never</span><span class="on">on failure</span><span>always</span></span></div>
+          <div class="field"><label>Pause on failure</label><span class="check">☑ wait for me before tearing down</span></div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card" style="background:#fbfbfb">
+          <h3>Plan <span class="mute" style="text-transform:none;letter-spacing:0">(updates as you edit)</span></h3>
+          <p style="margin:0 0 8px"><b>4 combinations × 2 suites</b></p>
+          <table>
+            <tr><td>colocated-ipv4-netboot-direct</td><td class="mute">smoke: deploy, 7 checks<br>lifecycle: deploy › scale-out › upgrade-k8s › scale-in › delete</td></tr>
+            <tr><td>colocated-ipv4-isoboot-direct</td><td class="mute">same</td></tr>
+            <tr><td>colocated-ipv4-netboot-mirror</td><td class="mute">same</td></tr>
+            <tr><td>colocated-ipv4-isoboot-mirror</td><td class="mute">same</td></tr>
+          </table>
+          <table style="margin-top:10px">
+            <tr><th>Needs</th><td>6 VMs at once · 12 GiB RAM · 60 GiB disk</td></tr>
+            <tr><th>Builds</th><td>none (released artifacts)</td></tr>
+            <tr><th>Takes</th><td>about 1h10 <span class="mute">(from 6 past runs)</span></td></tr>
+            <tr><th>Checks</th><td><span class="pass">✓ config ✓ docker ✓ kvm ✓ disk space</span></td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div style="border-top:1px solid var(--line);padding:12px 18px;display:flex;gap:8px;justify-content:flex-end;background:#fafafa">
+      <span class="mute" style="margin-right:auto;align-self:center;font-size:12px">This run only; your config files are not changed.</span>
+      <span class="btn">Cancel</span><span class="btn primary">Start run</span>
+    </div>
+  </div>
+  <div class="note"><b>Intent:</b> one form, no wizard. The plan answers "what exactly will happen, what does it need, how long" before you commit. Axis chips let you pick combinations without knowing glob syntax.</div>
+</section>
+
+<!-- 4 RUN LIVE -->
+<section class="screen" id="live">
+  <h2>4. Run: live</h2>
+  <div class="frame">
+    <div class="chrome"><span class="dots">●●●</span><span class="url">http://127.0.0.1:7600/runs/r-0412</span></div>
+    <div class="top"><span class="logo">◆ wendy</span><a class="tab">Home</a><a class="tab on">Runs</a><a class="tab">Catalog</a><a class="tab">Environments</a><a class="tab">Config</a><span class="sp"></span><span class="btn primary">＋ New run</span></div>
+    <div class="crumbs">Runs › <b>r-0412 my-branch</b></div>
+    <div class="page">
+      <div class="row" style="align-items:center;margin-bottom:14px">
+        <span class="chip run">● running</span><span class="mono">22:14</span>
+        <div class="col"><div class="bar"><i style="width:43%"></i></div></div>
+        <span>9/21 steps</span><span class="pass">✓ 8</span><span class="fail">✗ 0</span><span class="err">! 0</span><span class="mute">about 19 min left</span>
+        <span class="btn danger sm">Cancel run</span>
+      </div>
+      <div class="row">
+        <div class="card tree" style="width:360px;flex:none">
+          <div><span class="pass">✓</span>Build<span class="t">3m10</span></div>
+          <div style="padding-left:22px"><span class="pass">✓</span>tinkerbell <span class="mono mute">a1b2c3d dirty</span><span class="t">3m02</span></div>
+          <div><span class="run">●</span>colocated-ipv4-netboot-direct</div>
+          <div style="padding-left:22px"><span class="pass">✓</span>Setup <span class="mute">(8 steps)</span><span class="t">6m41</span></div>
+          <div style="padding-left:22px"><span class="pass">✓</span>smoke<span class="t">9m02</span></div>
+          <div style="padding-left:22px"><span class="run">●</span>lifecycle</div>
+          <div style="padding-left:40px"><span class="pass">✓</span>deploy <span class="mute">(reused)</span></div>
+          <div style="padding-left:40px"><span class="run">●</span>scale-out<span class="t">2m51</span></div>
+          <div style="padding-left:58px"><span class="pass">✓</span>capt.scale<span class="t">0m02</span></div>
+          <div class="sel" style="padding-left:58px"><span class="run">●</span>wait for nodes<span class="t">2m49</span></div>
+          <div style="padding-left:40px"><span class="skip">○</span>upgrade-k8s</div>
+          <div style="padding-left:40px"><span class="skip">○</span>scale-in</div>
+          <div style="padding-left:40px"><span class="skip">○</span>delete</div>
+          <div style="margin-top:8px;font-size:12px" class="mute">☑ Follow the running step</div>
+        </div>
+        <div class="col card">
+          <div class="row" style="align-items:baseline"><b>scale-out › wait for nodes</b><span class="mute">2m49</span><span style="flex:1"></span><span class="mute">MachineDeployment md-0 · replicas 1 → 2</span></div>
+          <div class="subtabs" style="margin-top:8px"><span class="on">Log</span><span>Artifacts (3)</span><span>Console: node-3</span><span>Details</span></div>
+<div class="log">22:11:02  scaling md-0 to 2 replicas
+22:11:04  hardware node-3 claimed (was spare)
+22:11:09  workflow node-3 started
+22:11:30  workflow node-3  2/6 actions
+22:12:58  workflow node-3  6/6 actions ✓
+22:13:40  node node-3 joined, waiting for Ready…
+▌</div>
+          <div class="actions"><span class="btn sm">Download kubeconfigs</span><span class="btn sm">Copy KUBECONFIG export</span><span class="btn sm">Open full log</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="note"><b>Intent:</b> the tree answers "where are we"; the right side explains the current step in human terms first ("replicas 1 → 2"), then the raw log. Clicking anything in the tree turns follow off; ticking it again jumps back to the running step.</div>
+</section>
+
+<!-- 5 RUN FAILED -->
+<section class="screen" id="failed">
+  <h2>5. Run: failed and paused</h2>
+  <div class="frame">
+    <div class="chrome"><span class="dots">●●●</span><span class="url">http://127.0.0.1:7600/runs/r-0410</span></div>
+    <div class="top"><span class="logo">◆ wendy</span><a class="tab">Home</a><a class="tab on">Runs</a><a class="tab">Catalog</a><a class="tab">Environments</a><a class="tab">Config</a><span class="sp"></span><span class="btn primary">＋ New run</span></div>
+    <div class="crumbs">Runs › <b>r-0410 my-branch</b></div>
+    <div class="page">
+      <div class="row" style="align-items:center;margin-bottom:14px">
+        <span class="chip pause">‖ paused on failure</span><span class="mono">41:10</span>
+        <div class="col"><div class="bar"><i style="width:66%;background:var(--fail)"></i></div></div>
+        <span>14/21 steps</span><span class="pass">✓ 13</span><span class="fail">✗ 1</span><span class="err">! 0</span>
+      </div>
+      <div class="failcard">
+        <h3>✗ Failed after 14m59: lifecycle › upgrade-k8s › wait for rollout</h3>
+        <div>Timed out waiting for MachineDeployment <b>md-0</b>: 1 of 2 machines updated.</div>
+        <div style="margin-top:4px"><b>Related:</b> workflow <b>node-3</b> failed at action <span class="mono">stream-image</span> (exit 1)</div>
+        <div style="margin-top:10px"><span class="mute">Evidence:</span> <span class="btn sm">Workflow node-3</span> <span class="btn sm">Console node-3</span> <span class="btn sm">BMC log</span> <span class="btn sm">Cluster dump</span></div>
+        <div style="margin-top:12px" class="mute">The environment is kept so you can look around. <span class="btn sm">Copy KUBECONFIG export</span> <span class="btn sm">Download kubeconfigs</span></div>
+        <div class="actions">
+          <span class="btn primary">Retry step</span>
+          <span class="btn">Continue <span class="mute">(record failure, run the rest)</span></span>
+          <span class="btn danger">Abort and tear down</span>
+        </div>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <div class="card tree" style="width:360px;flex:none">
+          <div><span class="pass">✓</span>Setup <span class="mute">(8 steps)</span><span class="t">6m41</span></div>
+          <div><span class="pass">✓</span>smoke<span class="t">9m02</span></div>
+          <div><span class="fail">✗</span>lifecycle</div>
+          <div style="padding-left:22px"><span class="pass">✓</span>deploy <span class="mute">(reused)</span></div>
+          <div style="padding-left:22px"><span class="pass">✓</span>scale-out<span class="t">4m12</span></div>
+          <div class="sel" style="padding-left:22px"><span class="fail">✗</span>upgrade-k8s<span class="t">14m59</span></div>
+          <div style="padding-left:22px"><span class="skip">–</span>scale-in <span class="mute">(not run)</span></div>
+          <div style="padding-left:22px"><span class="skip">–</span>delete <span class="mute">(not run)</span></div>
+        </div>
+<div class="col log">22:58:01  md-0 1/2 machines updated
+22:58:31  workflow node-3 action stream-image: exit 1
+22:58:31  workflow node-3 FAILED
+23:06:02  md-0 1/2 machines updated
+23:12:44  timed out after 15m0s</div>
+      </div>
+    </div>
+  </div>
+  <div class="note"><b>Intent:</b> answer, in order: what failed, why, where's the evidence, what can I do now. The TUI also offers "Open shell here"; the web UI gives a copyable <span class="mono">export KUBECONFIG=…</span> instead.</div>
+</section>
+
+<!-- 6 GRID -->
+<section class="screen" id="grid">
+  <h2>6. Run: many combinations (grid)</h2>
+  <div class="frame">
+    <div class="chrome"><span class="dots">●●●</span><span class="url">http://127.0.0.1:7600/runs/r-0409</span></div>
+    <div class="top"><span class="logo">◆ wendy</span><a class="tab">Home</a><a class="tab on">Runs</a><a class="tab">Catalog</a><a class="tab">Environments</a><a class="tab">Config</a><span class="sp"></span><span class="btn primary">＋ New run</span></div>
+    <div class="crumbs">Runs › <b>r-0409 ci-matrix</b></div>
+    <div class="page">
+      <div class="row" style="align-items:center;margin-bottom:12px">
+        <span class="chip err">! errored</span><span class="mono">1h52</span><span>8 combinations</span><span class="pass">✓ 7</span><span class="fail">✗ 0</span><span class="err">! 1</span>
+        <span style="flex:1"></span><span class="seg"><span class="on">Grid</span><span>Tree</span></span><span class="btn">Re-run errored (1)</span><span class="btn">JUnit report</span>
+      </div>
+      <div style="margin-bottom:8px"><span class="facet">topology <span class="chip">colocated</span><span class="chip">external</span></span><span class="facet">ipFamily <span class="chip">ipv4</span><span class="chip">ipv6</span></span><span class="facet">bootMode <span class="chip">netboot</span><span class="chip">isoboot</span></span><span class="facet">status <span class="chip">all</span></span></div>
+      <table class="grid">
+        <tr><th>Combination</th><th style="text-align:center">Build</th><th style="text-align:center">Setup</th><th style="text-align:center">smoke</th><th>Time</th><th></th></tr>
+        <tr><td>colocated-ipv4-netboot-direct</td><td class="c pass">✓</td><td class="c pass">✓</td><td class="c pass">✓</td><td class="mono">13m51</td><td></td></tr>
+        <tr><td>colocated-ipv4-isoboot-direct</td><td class="c pass">✓</td><td class="c pass">✓</td><td class="c pass">✓</td><td class="mono">15m02</td><td></td></tr>
+        <tr><td>colocated-ipv6-netboot-direct</td><td class="c pass">✓</td><td class="c pass">✓</td><td class="c pass">✓</td><td class="mono">16m40</td><td></td></tr>
+        <tr class="sel"><td>colocated-ipv6-isoboot-direct</td><td class="c pass">✓</td><td class="c err">!</td><td class="c skip">–</td><td class="mono">4m12</td><td class="err">BMC container did not start: port 8443 in use</td></tr>
+        <tr><td>external-ipv4-netboot-direct</td><td class="c pass">✓</td><td class="c pass">✓</td><td class="c pass">✓</td><td class="mono">18m09</td><td></td></tr>
+        <tr><td>external-ipv4-isoboot-direct</td><td class="c pass">✓</td><td class="c pass">✓</td><td class="c pass">✓</td><td class="mono">19m33</td><td></td></tr>
+        <tr><td>external-ipv6-netboot-direct</td><td class="c pass">✓</td><td class="c pass">✓</td><td class="c pass">✓</td><td class="mono">20m01</td><td></td></tr>
+        <tr><td>external-ipv6-isoboot-direct</td><td class="c pass">✓</td><td class="c pass">✓</td><td class="c pass">✓</td><td class="mono">21m17</td><td></td></tr>
+      </table>
+      <p class="mute" style="font-size:12px;margin-top:10px"><span class="err">! errored</span> means wendy or the host failed, not Tinkerbell/CAPT. Re-running usually helps.</p>
+    </div>
+  </div>
+  <div class="note"><b>Intent:</b> the shape of a matrix run in one look. Axis chips filter rows so patterns jump out (e.g. "only ipv6 + isoboot fails"). Each cell links to that combination's tree.</div>
+</section>
+
+<!-- 7 RUNS -->
+<section class="screen" id="runs">
+  <h2>7. Runs</h2>
+  <div class="frame">
+    <div class="chrome"><span class="dots">●●●</span><span class="url">http://127.0.0.1:7600/runs?q=my-branch</span></div>
+    <div class="top"><span class="logo">◆ wendy</span><a class="tab">Home</a><a class="tab on">Runs</a><a class="tab">Catalog</a><a class="tab">Environments</a><a class="tab">Config</a><span class="sp"></span><span class="btn primary">＋ New run</span></div>
+    <div class="page">
+      <div class="row" style="align-items:center;margin-bottom:10px"><span class="input">🔍 my-branch</span><span class="seg"><span class="on">All</span><span>Running</span><span>Failed</span><span>Errored</span><span>Passed</span></span></div>
+      <table>
+        <tr><th>ID</th><th>Profile / selection</th><th>Result</th><th>Started</th><th>Took</th><th>Environment</th><th></th></tr>
+        <tr><td>r-0412</td><td>my-branch</td><td><span class="chip run">● 9/21 running</span></td><td>22:00 today</td><td class="mono">22:14</td><td class="mute">—</td><td><span class="btn sm danger">Cancel</span></td></tr>
+        <tr><td>r-0410</td><td>my-branch</td><td><span class="chip fail">✗ failed</span> <span class="chip pause">‖ paused</span></td><td>18:01 today</td><td class="mono">41:10</td><td>kept</td><td><span class="btn sm">Re-run</span></td></tr>
+        <tr><td>r-0402</td><td>my-branch</td><td><span class="chip pass">✓ passed</span></td><td>yesterday</td><td class="mono">38:57</td><td class="mute">—</td><td><span class="btn sm">Re-run</span></td></tr>
+        <tr><td>r-0395</td><td>my-branch <span class="mute">(edited)</span></td><td><span class="chip pass">✓ passed</span></td><td>2 days ago</td><td class="mono">39:40</td><td class="mute">—</td><td><span class="btn sm">Re-run</span></td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- 8 CATALOG -->
+<section class="screen" id="catalog">
+  <h2>8. Catalog</h2>
+  <div class="frame">
+    <div class="chrome"><span class="dots">●●●</span><span class="url">http://127.0.0.1:7600/catalog/scenarios/scale-out</span></div>
+    <div class="top"><span class="logo">◆ wendy</span><a class="tab">Home</a><a class="tab">Runs</a><a class="tab on">Catalog</a><a class="tab">Environments</a><a class="tab">Config</a><span class="sp"></span><span class="btn primary">＋ New run</span></div>
+    <div class="page">
+      <div class="subtabs"><span>Profiles</span><span>Environments</span><span>Matrices</span><span>Suites</span><span class="on">Scenarios</span><span>Steps</span><span style="flex:1"></span><span class="input" style="min-width:200px">🔍 scale</span></div>
+      <div class="row">
+        <div class="card tree" style="width:260px;flex:none">
+          <div class="mute" style="font-size:12px">built-in</div>
+          <div class="sel">scale-out</div><div>scale-in</div>
+          <div class="mute" style="font-size:12px;margin-top:8px">./.wendy/acme.cue</div>
+          <div>acme-smoke</div>
+        </div>
+        <div class="col card">
+          <div class="row" style="align-items:baseline"><h2 style="margin:0;font-size:18px">scale-out</h2><span class="chip skip">built-in</span></div>
+          <p>Adds one worker by claiming a spare machine and waits until it is a Ready node.</p>
+          <table>
+            <tr><th>Steps</th><td>1 <span class="mono">capt.scale</span> machineDeployment +1<br>2 wait for nodes <span class="mute">timeout 20m</span><br>3 <span class="mono">assert.healthy</span></td></tr>
+            <tr><th>Needs</th><td>1 spare machine</td></tr>
+            <tr><th>Labels</th><td><span class="chip">scale</span></td></tr>
+            <tr><th>Used by</th><td>suite <a href="#">lifecycle</a></td></tr>
+          </table>
+          <div class="actions"><span class="btn primary">Run this scenario…</span><span class="btn">View CUE source</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="note"><b>Intent:</b> browsing turns straight into running: "Run this…" opens New run pre-filled. Every item shows where it comes from (built-in or file), so it's obvious what to edit.</div>
+</section>
+
+<!-- 9 ENVIRONMENTS -->
+<section class="screen" id="envs">
+  <h2>9. Environments</h2>
+  <div class="frame">
+    <div class="chrome"><span class="dots">●●●</span><span class="url">http://127.0.0.1:7600/environments</span></div>
+    <div class="top"><span class="logo">◆ wendy</span><a class="tab">Home</a><a class="tab">Runs</a><a class="tab">Catalog</a><a class="tab on">Environments</a><a class="tab">Config</a><span class="sp"></span><span class="btn primary">＋ New run</span></div>
+    <div class="page row">
+      <div class="col card" style="border-color:var(--pause)">
+        <div class="row" style="align-items:baseline"><span class="pause">‖</span><b>r-0410 · colocated-ipv4-netboot-direct</b><span style="flex:1"></span><span class="mute">paused since 23:12 · my-branch</span></div>
+        <table style="margin-top:8px">
+          <tr><th>Clusters</th><td>management <span class="mono">kind capt-r0410</span><br>workload <span class="mono">capt-playground</span> (2 nodes)</td></tr>
+          <tr><th>Tinkerbell</th><td class="mono">172.18.0.100 · chart v0.25.1-a1b2c3d</td></tr>
+          <tr><th>Machines</th><td><span class="mono">node-1 cp 172.18.0.11</span> <span class="pass">✓ Ready</span><br><span class="mono">node-2 worker 172.18.0.12</span> <span class="pass">✓ Ready</span><br><span class="mono">node-3 worker 172.18.0.13</span> <span class="fail">✗ workflow failed</span></td></tr>
+          <tr><th>BMC</th><td class="mono">redfish https://172.18.0.2:443/…/node-*</td></tr>
+        </table>
+        <div class="actions"><span class="btn">Copy KUBECONFIG export</span><span class="btn">Download kubeconfigs</span><span class="btn">Open run</span><span class="btn danger">Tear down…</span></div>
+      </div>
+      <div class="col card">
+        <div class="row" style="align-items:baseline"><span class="pass">✓</span><b>r-0397 · external-ipv6-netboot-direct</b><span style="flex:1"></span><span class="mute">kept · up 2d 4h</span></div>
+        <p class="mute">Kept after a passing run (keep: always).</p>
+        <div class="actions"><span class="btn">Copy KUBECONFIG export</span><span class="btn danger">Tear down…</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 10 CONFIG -->
+<section class="screen" id="config">
+  <h2>10. Config</h2>
+  <div class="frame">
+    <div class="chrome"><span class="dots">●●●</span><span class="url">http://127.0.0.1:7600/config</span></div>
+    <div class="top"><span class="logo">◆ wendy</span><a class="tab">Home</a><a class="tab">Runs</a><a class="tab">Catalog</a><a class="tab">Environments</a><a class="tab on">Config <span class="badge">2</span></a><span class="sp"></span><span class="btn primary">＋ New run</span></div>
+    <div class="page">
+      <p class="mute">Watching <span class="mono">~/.config/wendy/</span> and <span class="mono">./.wendy/</span> · last reload 23:20:14 · <span class="fail">2 errors</span> <span class="btn sm">Reload now</span></p>
+      <div class="card">
+        <div><span class="pass">✓</span> <span class="mono">./.wendy/environments.cue</span></div>
+        <div style="margin-top:6px"><span class="fail">✗</span> <span class="mono">./.wendy/acme.cue</span></div>
+        <div class="err-line"><b>41:12</b> scenarios."acme-smoke".steps.0.timeout: "15 min" is not a duration (e.g. "15m")</div>
+        <div class="err-line"><b>58:3</b>&nbsp; profiles.nightly.suites.1: unknown suite "lifecylce" (did you mean "lifecycle"?)</div>
+        <div style="margin-top:6px"><span class="pass">✓</span> <span class="mono">./.wendy/profiles.cue</span></div>
+      </div>
+      <p>The last valid config is still in use, so everything else keeps working. Fix the file and save; wendy reloads it automatically.</p>
+    </div>
+  </div>
+  <div class="note"><b>Intent:</b> config errors read like compiler errors, and a bad file never breaks the rest. The badge on the Config tab is visible from every page.</div>
+</section>
+
+<!-- 11 PALETTE -->
+<section class="screen" id="palette">
+  <h2>11. Command palette (⌘K or :)</h2>
+  <div class="frame" style="height:420px">
+    <div class="chrome"><span class="dots">●●●</span><span class="url">http://127.0.0.1:7600/</span></div>
+    <div class="top"><span class="logo">◆ wendy</span><a class="tab on">Home</a><a class="tab">Runs</a><a class="tab">Catalog</a><a class="tab">Environments</a><a class="tab">Config</a><span class="sp"></span><span class="btn primary">＋ New run</span></div>
+    <div class="overlay">
+      <div class="palette">
+        <div class="q">ru▌</div>
+        <div class="it sel"><span>Run <b>pr-check</b></span><span class="mute">profile</span></div>
+        <div class="it"><span>Run <b>my-branch</b></span><span class="mute">profile</span></div>
+        <div class="it"><span>Re-run <b>r-0410</b></span><span class="mute">same selection</span></div>
+        <div class="it"><span>Go to <b>Runs</b></span><span class="mute">page</span></div>
+        <div class="it mute" style="border-top:1px solid #eee;font-size:12px"><span><span class="kbd">↑↓</span> move &nbsp;<span class="kbd">enter</span> run &nbsp;<span class="kbd">esc</span> close</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</body>
+</html>

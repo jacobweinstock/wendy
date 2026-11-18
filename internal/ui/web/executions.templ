@@ -1,0 +1,441 @@
+package web
+
+import (
+	"fmt"
+	"path/filepath"
+
+	"github.com/tinkerbell/wendy/internal/engine"
+	"github.com/tinkerbell/wendy/internal/event"
+	"github.com/tinkerbell/wendy/internal/service"
+	"github.com/tinkerbell/wendy/internal/ui"
+	"github.com/tinkerbell/wendy/internal/vocab"
+)
+
+// Executions.
+templ executionsPage(l layout, d executionsData) {
+	@shell(l, "Executions") {
+		<div class="page">
+			<div class="row" style="align-items:center;margin-bottom:10px">
+				<input id="filter" class="input" type="search" name="q" value={ d.Q } placeholder="Filter by number, plan or testbed" aria-label="Filter executions" hx-get={ executionsPath } hx-trigger="input changed delay:300ms, search" hx-target="#main" hx-select="#main" hx-swap="outerHTML" hx-push-url="true" hx-include="#status-filter"/>
+				<input id="status-filter" type="hidden" name="status" value={ d.Status }/>
+				<span class="seg">
+					for _, f := range executionFilters {
+						<a
+							class={ templ.KV("on", d.Status == f.Value) }
+							href={ statusURL(d.Q, f.Value) }
+							if d.Status == f.Value {
+								aria-current="true"
+							}
+						>{ f.Label }</a>
+					}
+				</span>
+			</div>
+			if len(d.Rows) > 0 {
+				<table>
+					<tr><th>Execution</th><th>Plan</th><th>Result</th><th>Testbed</th><th>Started</th><th>Took</th><th></th></tr>
+					for _, row := range d.Rows {
+						@executionRowView(row)
+					}
+				</table>
+			} else if d.Any {
+				<div class="empty">
+					<p>No executions match.</p>
+					<a class="btn" href={ executionsURL(nil) }>Show all executions</a>
+				</div>
+			} else {
+				<div class="empty">
+					<p>No executions yet.</p>
+					<a class="btn primary" href={ runTestsURL("", nil) }>Run a plan…</a>
+				</div>
+			}
+		</div>
+	}
+}
+
+templ executionRowView(row executionRow) {
+	{{ r := row.Sum }}
+	<tr>
+		<td><a href={ executionURL(r.ID) }>{ "#" + r.ID }</a></td>
+		<td>
+			if row.PlanURL != "" {
+				<a href={ row.PlanURL }>{ row.Plan }</a>
+			} else if row.Plan != "" {
+				{ row.Plan }
+			} else {
+				<span class="mute" title="Run from a form, not saved as a plan">Unsaved plan</span>
+			}
+			if r.Edited {
+				<span class="mute" title="The plan's settings were changed for this execution only">(changed)</span>
+			}
+		</td>
+		<td>
+			@resultChips(r)
+		</td>
+		<td>
+			if row.TestbedURL != "" {
+				<a href={ row.TestbedURL }>{ row.Testbed }</a>
+			} else if row.Testbed != "" {
+				{ row.Testbed }
+			} else {
+				<span class="mute">—</span>
+			}
+			if n := len(r.Combinations); n > 1 {
+				<span class="mute" title={ vocab.Count(n, "combination", "combinations") }>{ fmt.Sprintf("× %d", n) }</span>
+			}
+			if kept(r) {
+				<a class="chip pause" style="text-decoration:none" href={ executionURL(r.ID) } title="The testbed is still up">kept</a>
+			}
+		</td>
+		<td>{ ago(r.Started) }</td>
+		<td class="mono">{ dur(elapsed(r)) }</td>
+		<td style="white-space:nowrap">
+			if !r.Status.Done() {
+				<button class="btn sm danger" hx-post={ executionAPI(r.ID, "cancel") } hx-confirm={ "Cancel #" + r.ID + "? Its testbeds are torn down unless kept." }>Cancel execution</button>
+			} else {
+				<button class="btn sm" hx-post={ executionAPI(r.ID, "run-again") }>Run again</button>
+				<button class="btn sm" hx-delete={ executionAPI(r.ID) } hx-confirm={ "Delete #" + r.ID + " and its logs and artifacts?" }>Delete</button>
+			}
+		</td>
+	</tr>
+}
+
+templ resultChips(r *engine.Summary) {
+	if waiting(r) {
+		<span class={ "chip", cls(event.Failed) }>{ glyph(event.Failed) + " " + word(event.Failed) }</span>
+		<span class={ "chip", cls(event.Paused) }>{ glyph(event.Paused) + " " + word(event.Paused) }</span>
+	} else if !r.Status.Done() {
+		<span class={ "chip", cls(event.Running) }>{ fmt.Sprintf("%s %d/%d steps", glyph(event.Running), r.Steps.Done, r.Steps.Total) }</span>
+	} else {
+		<span class={ "chip", cls(r.Status) }>{ glyph(r.Status) + " " + word(r.Status) }</span>
+		<span class="mute">{ combinationCounts(r) }</span>
+	}
+}
+
+// Execution.
+templ executionPage(l layout, d executionData) {
+	@shell(l, "#"+d.Sum.ID) {
+		<div class="crumbs">
+			<a href={ executionsURL(nil) }>Executions</a> ›
+			<b>{ "#" + d.Sum.ID + " " + d.Sum.Label }</b>
+		</div>
+		<div id="execution">
+			@executionBody(d)
+		</div>
+	}
+}
+
+templ executionBody(d executionData) {
+	<div
+		id="execution-body"
+		class="page"
+		if d.Live {
+			data-refresh
+			hx-get={ d.Self }
+			hx-trigger="refresh delay:100ms"
+			hx-target="this"
+			hx-swap="outerHTML"
+		}
+	>
+		@executionHeader(d)
+		if d.Failure != nil {
+			@failCard(d)
+		}
+		for _, e := range d.Kept {
+			if e.Combination == d.InView {
+				@keptTestbedCard(e)
+			} else {
+				@keptTestbedLine(d, e)
+			}
+		}
+		if d.Grid {
+			@executionGrid(d)
+		} else {
+			@executionTree(d)
+		}
+	</div>
+}
+
+templ executionHeader(d executionData) {
+	<div class="row" style="align-items:center;margin-bottom:14px;gap:12px;flex-wrap:wrap">
+		@statusChip(d.Sum)
+		<span class="mono">{ dur(elapsed(d.Sum)) }</span>
+		<span>
+			if d.Row.Plan != "" {
+				{ "plan " }
+				if d.Row.PlanURL != "" {
+					<a href={ d.Row.PlanURL }>{ d.Row.Plan }</a>
+				} else {
+					{ d.Row.Plan }
+				}
+				if d.Sum.Edited {
+					<span class="mute" title="The plan's settings were changed for this execution only">(changed)</span>
+				}
+				{ " · " }
+			} else {
+				<span class="mute">unsaved plan · </span>
+			}
+			{ "testbed " }
+			if d.Row.TestbedURL != "" {
+				<a href={ d.Row.TestbedURL }>{ d.Row.Testbed }</a>
+			} else {
+				{ d.Row.Testbed }
+			}
+			if n := len(d.Sum.Combinations); n > 1 {
+				{ " · " + vocab.Count(n, "combination", "combinations") }
+			}
+		</span>
+		<div class="col" style="min-width:120px">
+			<div class={ "bar", templ.KV("failed", d.count(event.Failed)+d.count(event.Errored) > 0) }><i style={ width(d.View.Done(), d.View.Total) }></i></div>
+		</div>
+		<span>{ fmt.Sprintf("%d/%d steps", d.View.Done(), d.View.Total) }</span>
+		for _, st := range []event.Status{event.Passed, event.Failed, event.Errored} {
+			<span class={ cls(st) }>{ fmt.Sprintf("%s %d", glyph(st), d.count(st)) }</span>
+		}
+		if d.ETA != "" {
+			<span class="mute">{ d.ETA }</span>
+		}
+		if len(d.Sum.Combinations) > 1 {
+			<span class="seg">
+				<a class={ templ.KV("on", d.Grid) } href={ d.viewURL("grid") }>Grid</a>
+				<a class={ templ.KV("on", !d.Grid) } href={ d.viewURL("tree") }>Tree</a>
+			</span>
+		}
+		if d.Live {
+			<button class="btn danger sm" hx-post={ executionAPI(d.Sum.ID, "cancel") } hx-confirm={ "Cancel #" + d.Sum.ID + "? Its testbeds are torn down unless kept." }>Cancel execution</button>
+		} else {
+			if d.Failed > 0 && len(d.Sum.Combinations) > 1 {
+				<button class="btn" hx-post={ executionAPI(d.Sum.ID, "run-failed-again") }>{ fmt.Sprintf("Run failed again (%d)", d.Failed) }</button>
+			}
+			<button class="btn" hx-post={ executionAPI(d.Sum.ID, "run-again") }>Run again</button>
+			if d.Report {
+				<a class="btn" href={ d.file("report.junit.xml") }>JUnit report</a>
+			}
+		}
+	</div>
+	if len(d.Sum.TeardownErrors) > 0 {
+		<div class="note">
+			<b>Tearing down left things behind:</b>
+			for _, e := range d.Sum.TeardownErrors {
+				<div class="mono">{ e }</div>
+			}
+		</div>
+	}
+}
+
+templ statusChip(s *engine.Summary) {
+	if waiting(s) {
+		<span class={ "chip", cls(event.Paused) }>{ glyph(event.Paused) + " " + word(event.Paused) + " after a failure" }</span>
+	} else {
+		<span class={ "chip", cls(s.Status) }>{ glyph(s.Status) + " " + word(s.Status) }</span>
+	}
+}
+
+templ failCard(d executionData) {
+	<div class={ "failcard", templ.KV("errored", d.Failure.Status == event.Errored) }>
+		<h3>{ d.failureTitle() }</h3>
+		if len(d.Sum.Combinations) > 1 {
+			<div class="mute">{ "combination " + d.FailedCombination }</div>
+		}
+		<div style="white-space:pre-wrap">{ d.Failure.Msg }</div>
+		if d.Failure.Related != "" {
+			<div style="margin-top:4px"><b>Related:</b> { d.Failure.Related }</div>
+		}
+		if len(d.diagnostics()) > 0 {
+			<div style="margin-top:10px">
+				if d.Paused {
+					<span class="mute">Collected so far:</span>
+				} else {
+					<span class="mute">Diagnostics:</span>
+				}
+				for _, e := range d.diagnostics() {
+					<a class="btn sm" href={ e.Href } target="_blank">{ e.Label }</a>
+				}
+			</div>
+		}
+		if d.Paused {
+			<div class="actions">
+				<button class="btn primary" hx-post={ d.action("retry") }>Retry step</button>
+				<button class="btn" hx-post={ d.action("continue") }>Continue <span class="mute">(record the failure, run the rest)</span></button>
+				<button class="btn danger" hx-post={ d.action("abort") } hx-confirm={ "Abort #" + d.Sum.ID + " and tear down its testbed? This deletes its clusters, VMs and network." }>Abort and tear down</button>
+			</div>
+		} else if d.Failure.Status == event.Errored {
+			<div class="mute" style="margin-top:8px">Errored means Wendy or the host failed, not Tinkerbell or CAPT. Running it again usually helps.</div>
+		}
+	</div>
+}
+
+// keptTestbedCard is a combination's testbed that is still up: what it is
+// made of, how to reach its clusters, and how to tear it down.
+templ keptTestbedCard(e service.KeptTestbed) {
+	<div class="card" style="border-color:var(--pause);margin-bottom:14px">
+		<div class="row" style="align-items:baseline;gap:8px">
+			<h3>Kept testbed <span class="mono" style="text-transform:none;letter-spacing:0">{ address(e) }</span></h3>
+			<span style="flex:1"></span>
+			<span class={ "chip", cls(keptStatus(e)) }>{ glyph(keptStatus(e)) + " " + word(keptStatus(e)) }</span>
+		</div>
+		if rows := keptRows(e); len(rows) > 0 {
+			<table>
+				for _, row := range rows {
+					<tr>
+						<th>{ row.Label }</th>
+						<td>
+							for _, line := range row.Lines {
+								<div>
+									if line.Text != "" {
+										{ line.Text }
+									}
+									<span class="mono">{ line.Code }</span>
+								</div>
+							}
+						</td>
+					</tr>
+				}
+			</table>
+		} else {
+			<p class="mute">Nothing is up on it yet.</p>
+		}
+		<div class="actions">
+			<button class="btn" data-copy={ exportLine(e.Dir) } title={ exportLine(e.Dir) }>Copy export KUBECONFIG</button>
+			for _, c := range kubeconfigs(e) {
+				<a class="btn" href={ kubeconfigURL(e, c) } download>{ clusterLabel(c) + " kubeconfig" }</a>
+			}
+			<button class="btn danger" hx-post={ teardownAPI(e.Execution, e.Combination) } hx-confirm={ "Tear down " + address(e) + "? This deletes its clusters, VMs and network." }>Tear down…</button>
+		</div>
+	</div>
+}
+
+// keptTestbedLine is a kept testbed folded to one line, for an execution that
+// kept several. Its address opens its card.
+templ keptTestbedLine(d executionData, e service.KeptTestbed) {
+	<div class="card row" style="align-items:center;gap:8px;padding:8px 14px;margin-bottom:8px">
+		<a href={ d.keptURL(e.Combination) }>Kept testbed <span class="mono">{ address(e) }</span></a>
+		<span class={ cls(keptStatus(e)) }>{ glyph(keptStatus(e)) + " " + word(keptStatus(e)) }</span>
+		<span style="flex:1"></span>
+		<button class="btn sm danger" hx-post={ teardownAPI(e.Execution, e.Combination) } hx-confirm={ "Tear down " + address(e) + "? This deletes its clusters, VMs and network." }>Tear down…</button>
+	</div>
+}
+
+templ executionGrid(d executionData) {
+	<table class="grid">
+		<tr>
+			<th>Combination</th>
+			for _, c := range d.Cols {
+				<th style="text-align:center">{ colName(c) }</th>
+			}
+			<th>Time</th>
+			<th></th>
+		</tr>
+		for _, c := range d.Sum.Combinations {
+			<tr class={ templ.KV("sel", c.Name == d.FailedCombination) }>
+				<td><a href={ d.combinationURL(c.Name) }>{ c.Name }</a></td>
+				for _, col := range d.Cols {
+					<td class={ "c", cls(d.cell(c, col)) } title={ colName(col) + ": " + word(d.cell(c, col)) }>{ glyph(d.cell(c, col)) }</td>
+				}
+				<td class="mono">
+					if c.Ms > 0 {
+						{ dur(c.Ms) }
+					}
+				</td>
+				<td class={ cls(c.Status) }>
+					if c.Failure != nil {
+						{ firstLine(c.Failure.Msg) }
+					}
+				</td>
+			</tr>
+		}
+	</table>
+	<p class="mute" style="font-size:12px;margin-top:10px">
+		for _, st := range gridLegend {
+			<span class={ cls(st) }>{ glyph(st) + " " + word(st) }</span>&nbsp;&nbsp;
+		}
+		· <span class={ cls(event.Errored) }>{ glyph(event.Errored) + " " + word(event.Errored) }</span> means Wendy or the host failed, not Tinkerbell or CAPT.
+	</p>
+}
+
+templ executionTree(d executionData) {
+	<div class="row">
+		<div class="card tree" style="width:380px;flex:none">
+			for _, r := range d.Rows {
+				<a href={ d.nodeURL(r.Key) } class={ templ.KV("sel", d.Sel != nil && r.Key == d.Sel.Key) } style={ indent(r.Depth) }>
+					<span class={ cls(r.Status) }>{ glyph(r.Status) }</span>
+					<span>{ r.Label() }</span>
+					if r.HasKids && !r.Expanded {
+						<span class="mute">›</span>
+					}
+					if r.Status == event.Skipped {
+						<span class="mute">{ "(" + word(r.Status) + ")" }</span>
+					}
+					if r.Elapsed() > 0 {
+						<span class="t">{ dur(r.Elapsed()) }</span>
+					}
+				</a>
+			}
+			<a id="follow" class="mute" style="margin-top:8px;font-size:12px" href={ d.viewURL("tree") }>
+				if d.Follow {
+					☑ Follow the running step
+				} else {
+					☐ Follow the running step
+				}
+			</a>
+		</div>
+		<div class="col card">
+			if d.Sel != nil {
+				@nodeDetail(d)
+			}
+		</div>
+	</div>
+}
+
+templ nodeDetail(d executionData) {
+	<div class="row" style="align-items:baseline;gap:10px">
+		<b>{ nodeTitle(d.Sel) }</b>
+		<span class="mute">{ dur(d.Sel.Elapsed()) }</span>
+		<span style="flex:1"></span>
+		<span class={ cls(d.Sel.Status) }>{ glyph(d.Sel.Status) + " " + word(d.Sel.Status) }</span>
+	</div>
+	if d.Sel.Summary != "" {
+		<div style="margin-top:4px">{ d.Sel.Summary }</div>
+	} else if d.Sel.Msg != "" {
+		<div class={ cls(d.Sel.Status) } style="margin-top:4px;white-space:pre-wrap">{ d.Sel.Msg }</div>
+	}
+	if d.Logs != "" {
+		<div class="log" style="margin-top:10px;display:flex;flex-direction:column-reverse"><div>{ d.Logs }</div></div>
+	} else {
+		<p class="mute">No log lines.</p>
+	}
+	if len(d.Sel.Cases) > 0 {
+		<h3 class="mute" style="font-size:12px;margin:12px 0 4px">CASES</h3>
+		<table>
+			for _, c := range d.Sel.Cases {
+				<tr>
+					<td class={ cls(c.Status) }>{ glyph(c.Status) }</td>
+					<td>{ caseName(c) }</td>
+					<td class="mono">{ dur(c.Ms) }</td>
+					<td class="mute">{ firstLine(c.Msg) }</td>
+				</tr>
+			}
+		</table>
+	}
+	if len(d.Sel.Files) > 0 {
+		<div style="margin-top:10px">
+			<span class="mute">Artifacts:</span>
+			for _, f := range d.Sel.Files {
+				<a class="btn sm" href={ d.file(f) } target="_blank">{ filepath.Base(f) }</a>
+			}
+		</div>
+	}
+	<div class="actions">
+		if d.Sel.Kind == ui.KindStep && d.Sel.Dir != "" {
+			<a class="btn sm" href={ d.file(d.Sel.Dir + "/step.log") } target="_blank">Open full log</a>
+		}
+		for _, c := range d.Consoles {
+			<a class="btn sm" href={ c.Href } target="_blank">{ "Console: " + c.Label }</a>
+		}
+		if d.Kubeconfig != "" {
+			<a class="btn sm" href={ d.Kubeconfig } download>Download kubeconfig</a>
+		}
+		if d.Export != "" {
+			<button class="btn sm" data-copy={ d.Export } title={ d.Export }>Copy export KUBECONFIG</button>
+		}
+	</div>
+}

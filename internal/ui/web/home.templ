@@ -1,0 +1,177 @@
+package web
+
+import (
+	"github.com/tinkerbell/wendy/internal/config"
+	"github.com/tinkerbell/wendy/internal/event"
+	"github.com/tinkerbell/wendy/internal/service"
+	"github.com/tinkerbell/wendy/internal/vocab"
+)
+
+// Home.
+templ homePage(l layout, d homeData) {
+	@shell(l, "Home") {
+		if d.First {
+			@firstLaunch(d)
+		} else {
+			<div class="page">
+				for _, w := range d.Waiting {
+					@waitingBanner(w)
+				}
+				<div class="row">
+					<div class="col" style="flex:1.15">
+						<div class="card">
+							<h3>Plans</h3>
+							for i, p := range d.Plans {
+								@planRowView(p, i == 0)
+							}
+							<a class="planrow" style="border-style:dashed;text-decoration:none" href={ runTestsURL("", nil) }>
+								<span class="name">Run a plan…</span>
+								<span class="desc">Pick a testbed, suites and options</span>
+							</a>
+						</div>
+					</div>
+					<div class="col">
+						<div class="card">
+							<h3>Running</h3>
+							if len(d.Running) == 0 {
+								<div class="mute">Nothing is running.</div>
+							}
+							for _, e := range d.Running {
+								<div class="row" style="align-items:center;gap:8px;margin-top:6px">
+									<span class={ cls(event.Running) }>{ glyph(event.Running) }</span>
+									<a href={ executionURL(e.Sum.ID) }><b>{ "#" + e.Sum.ID }</b></a>
+									<span>{ e.Sum.Label }</span>
+									if n := len(e.Sum.Combinations); n > 1 {
+										<span class="mute">{ vocab.Count(n, "combination", "combinations") }</span>
+									}
+									<span style="flex:1"></span>
+									<span class="mono">{ dur(elapsed(e.Sum)) }</span>
+								</div>
+								<div class="bar" style="margin:8px 0 2px"><i style={ width(e.Sum.Steps.Done, e.Sum.Steps.Total) }></i></div>
+								<div class="mute" style="font-size:12px">{ progressLine(e) }</div>
+							}
+						</div>
+						if len(d.Kept) > 0 {
+							<div class="card">
+								<h3>Kept testbeds</h3>
+								<div class="mute" style="font-size:12px">Left up after an execution. They use this host's memory and disk until you tear them down.</div>
+								for _, e := range d.Kept {
+									@keptTestbedRow(e)
+								}
+							</div>
+						}
+						<div class="card">
+							<h3>Recent</h3>
+							if len(d.Recent) == 0 {
+								<div class="mute">No finished executions yet.</div>
+							}
+							<table>
+								for _, r := range d.Recent {
+									<tr>
+										<td class={ cls(r.Status) } title={ word(r.Status) }>{ glyph(r.Status) }</td>
+										<td><a href={ executionURL(r.ID) }>{ "#" + r.ID }</a></td>
+										<td>{ r.Label } <span class="mute">{ combinationCounts(r) }</span></td>
+										<td class="mono">{ dur(r.Ms) }</td>
+										<td class="mute">{ ago(r.Started) }</td>
+									</tr>
+								}
+							</table>
+							<div class="actions"><a class="btn sm" href={ executionsURL(nil) }>All executions</a></div>
+						</div>
+					</div>
+				</div>
+			</div>
+		}
+	}
+}
+
+// waitingBanner is an execution paused after a failure, with what can be done
+// about it.
+templ waitingBanner(w waitingExecution) {
+	<div class="banner">
+		<span class={ cls(event.Paused) } style="font-size:20px">{ glyph(event.Paused) }</span>
+		<div class="col">
+			<b>Waiting for you:</b>
+			<a href={ keptTestbedURL(w.Sum.ID, w.Combination) }>{ "#" + w.Sum.ID + " " + w.Sum.Label }</a>
+			paused after a failure. The testbed is kept so you can look around.
+			if w.Failure != nil {
+				<div class="mute" style="font-size:13px">{ failureTitle(w.Failure) }</div>
+			}
+		</div>
+		<div class="actions" style="margin:0">
+			<a class="btn primary" href={ keptTestbedURL(w.Sum.ID, w.Combination) }>Open execution</a>
+			<button class="btn" hx-post={ decisionAPI(w.Sum.ID, w.Combination, "retry") }>Retry step</button>
+			<button class="btn" hx-post={ decisionAPI(w.Sum.ID, w.Combination, "continue") } title="Record the failure and run the rest">Continue</button>
+			<button class="btn danger" hx-post={ decisionAPI(w.Sum.ID, w.Combination, "abort") } hx-confirm={ "Abort #" + w.Sum.ID + " and tear down its testbed? This deletes its clusters, VMs and network." }>Abort and tear down</button>
+		</div>
+	</div>
+}
+
+templ planRowView(p planRow, primary bool) {
+	<div class="planrow">
+		<div class="col">
+			<a class="name" href={ entryURL(config.KindPlan, p.Name) } style="text-decoration:none">{ p.Name }</a>
+			<div class="desc">{ p.Desc }</div>
+		</div>
+		if p.Last != nil {
+			<a class={ "chip", cls(p.Last.Status) } style="text-decoration:none" href={ executionURL(p.Last.ID) } title={ "Last execution #" + p.Last.ID + ", " + word(p.Last.Status) }>{ glyph(p.Last.Status) + " " + dur(p.Last.Ms) }</a>
+		} else {
+			<span class="chip skip">Not run yet</span>
+		}
+		<button class={ "btn", templ.KV("primary", primary) } hx-post={ apiExecutions } hx-vals={ vals("plan", p.Name) }>Run</button>
+		<a class="btn" href={ runTestsURL(p.Name, nil) }>Change and run…</a>
+	</div>
+}
+
+// keptTestbedRow is a kept testbed in one line, for Home.
+templ keptTestbedRow(e service.KeptTestbed) {
+	<div class="row" style="align-items:center;gap:8px;margin-top:8px">
+		<span class={ cls(e.Status) } title={ word(e.Status) }>{ glyph(e.Status) }</span>
+		<div class="col">
+			<a href={ keptTestbedURL(e.Execution, e.Combination) }><b class="mono">{ address(e) }</b></a>
+			<div class="mute" style="font-size:12px">{ e.Label + " · kept " + ago(e.Since) }</div>
+		</div>
+		<button class="btn sm" data-copy={ exportLine(e.Dir) } title={ exportLine(e.Dir) }>Copy export KUBECONFIG</button>
+		<button class="btn sm danger" hx-post={ teardownAPI(e.Execution, e.Combination) } hx-confirm={ "Tear down " + address(e) + "? This deletes its clusters, VMs and network." }>Tear down…</button>
+	</div>
+}
+
+templ firstLaunch(d homeData) {
+	<div class="page">
+		<div class="empty">
+			<h2 style="margin:0 0 6px">Welcome to Wendy</h2>
+			<p class="mute">
+				No config yet. Wendy looked in
+				for i, dir := range d.Dirs {
+					if i > 0 {
+						{ " and " }
+					}
+					<span class="mono">{ shortPath(dir) }</span>
+				}
+				.
+			</p>
+			if d.Quick != nil {
+				<p>You can run the built-in plan right now:</p>
+				<div class="planrow" style="max-width:760px;margin:12px auto 8px;text-align:left">
+					<span class="name">quickstart</span>
+					<span class="desc">{ quickLine(d.Quick) }</span>
+					<button class="btn primary" hx-post={ apiExecutions } hx-vals={ vals("plan", "quickstart") }>Run</button>
+				</div>
+			}
+			<p>
+				or <button class="btn sm" hx-post={ apiStarter }>{ "Create " + shortPath(d.StarterPath) }</button>
+				<span class="mute">a commented starter file; Wendy reloads it as you edit</span>
+			</p>
+			<p style="margin-top:22px">
+				<b>Host checks</b>
+				for _, c := range d.Checks {
+					&nbsp;
+					<span class={ checkClass(c) }>{ checkGlyph(c) + " " + c.Name }</span>
+					if !c.OK && c.Detail != "" {
+						<span class="mute">{ "(" + c.Detail + ")" }</span>
+					}
+				}
+			</p>
+		</div>
+	</div>
+}

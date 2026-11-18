@@ -1,0 +1,147 @@
+{
+  "arch": "amd64",
+  "network": {
+    "family": "ipv4",
+    "nat64": false,
+    "mirror": {
+      "enabled": false,
+      "upstreams": [
+        "ghcr.io",
+        "quay.io",
+        "registry.k8s.io",
+        "gcr.io",
+        "docker.io"
+      ]
+    }
+  },
+  "managementCluster": {
+    "type": "kind"
+  },
+  "tinkerbell": {
+    "topology": "colocated",
+    "chart": {
+      "location": "oci://ghcr.io/tinkerbell/charts/tinkerbell",
+      "version": "latest"
+    },
+    "values": {},
+    "bootMode": "netboot",
+    "namespace": "tinkerbell",
+    "captainos": {
+      "flavor": "trixie-slim",
+      "image": "ghcr.io/tinkerbell/captain/artifacts:v0.1.0-slim"
+    }
+  },
+  "clusterAPI": {
+    "core": "v1.14.4",
+    "capt": {
+      "version": "v0.7.0",
+      "repository": "https://github.com/tinkerbell/cluster-api-provider-tinkerbell/releases"
+    }
+  },
+  "hardware": {
+    "backend": {
+      "type": "libvirt",
+      "uri": "qemu:///system",
+      "diskPath": "/tmp"
+    },
+    "bmc": {
+      "image": "ghcr.io/jacobweinstock/virtualbmc:latest",
+      "protocol": "redfish"
+    },
+    "machines": {
+      "controlPlane": {
+        "count": 1,
+        "cpus": 2,
+        "memMiB": 2048,
+        "diskGiB": 10,
+        "labels": {}
+      },
+      "spare": {
+        "count": 1,
+        "cpus": 2,
+        "memMiB": 2048,
+        "diskGiB": 10,
+        "labels": {}
+      },
+      "worker": {
+        "count": 1,
+        "cpus": 2,
+        "memMiB": 2048,
+        "diskGiB": 10,
+        "labels": {}
+      }
+    }
+  },
+  "workloadCluster": {
+    "name": "wendy",
+    "kubernetesVersion": "v1.36.4",
+    "osVersion": "2404",
+    "cni": "kube-router",
+    "kubeVipVersion": "1.1.2"
+  },
+  "diagnostics": {
+    "collect": "onFailure",
+    "consoles": true
+  },
+  "setup": [
+    {
+      "labels": [],
+      "timeout": "10m",
+      "retries": 0,
+      "continueOnFailure": false,
+      "uses": "testbed.network"
+    },
+    {
+      "labels": [],
+      "timeout": "10m",
+      "retries": 0,
+      "continueOnFailure": false,
+      "uses": "testbed.registry"
+    },
+    {
+      "labels": [],
+      "timeout": "15m",
+      "retries": 0,
+      "continueOnFailure": false,
+      "uses": "testbed.distro",
+      "with": {
+        "cluster": "management"
+      }
+    },
+    {
+      "labels": [],
+      "timeout": "10m",
+      "retries": 0,
+      "continueOnFailure": false,
+      "uses": "testbed.bmc"
+    },
+    {
+      "labels": [],
+      "timeout": "20m",
+      "retries": 0,
+      "continueOnFailure": false,
+      "uses": "tinkerbell.install"
+    },
+    {
+      "labels": [],
+      "timeout": "20m",
+      "retries": 0,
+      "continueOnFailure": false,
+      "uses": "capi.init"
+    },
+    {
+      "labels": [],
+      "timeout": "10m",
+      "retries": 0,
+      "continueOnFailure": false,
+      "uses": "hardware.create"
+    },
+    {
+      "labels": [],
+      "timeout": "10m",
+      "retries": 0,
+      "continueOnFailure": false,
+      "uses": "hardware.register"
+    }
+  ]
+}

@@ -1,0 +1,123 @@
+package web
+
+import (
+	"fmt"
+	"net/url"
+
+	"github.com/tinkerbell/wendy/internal/event"
+	"github.com/tinkerbell/wendy/internal/vocab"
+)
+
+// Frame.
+templ shell(l layout, title string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title } · Wendy</title>
+			<script>
+				(function () {
+					var t = null;
+					try { t = localStorage.getItem("theme"); } catch (e) {}
+					if (t === "dark" || (t !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
+						document.documentElement.classList.add("dark");
+					}
+				})();
+			</script>
+			<link rel="stylesheet" href={ asset("wendy.css") }/>
+			<script src={ asset("htmx.min.js") }></script>
+			<script src={ asset("app.js") }></script>
+		</head>
+		<body
+			if l.Stream != "" {
+				data-stream={ l.Stream }
+				data-events={ l.Events }
+			}
+		>
+			if l.Refresh {
+				<div id="main" data-refresh hx-get={ l.Self } hx-trigger="refresh delay:400ms" hx-select="#main" hx-swap="outerHTML">
+					@topbar(l)
+					<div id="form-error" class="crumbs"></div>
+					{ children... }
+				</div>
+			} else {
+				@topbar(l)
+				<div id="form-error" class="crumbs"></div>
+				{ children... }
+			}
+			@overlays(l)
+		</body>
+	</html>
+}
+
+templ topbar(l layout) {
+	<nav class="top">
+		<a class="logo" href={ templ.SafeURL(homePath) } title="Provisioning Engine for Tinkerbell E2E Runs">
+			<img class="logo-for-light" src={ asset("artwork/Tinkerbell-Logo-Landscape-Dark-2.png") } alt="Tinkerbell"/>
+			<img class="logo-for-dark" src={ asset("artwork/Tinkerbell-Logo-Landscape-Light-2.png") } alt="Tinkerbell"/>
+		</a>
+		for _, t := range navTabs {
+			@tab(l, t)
+		}
+		<span class="sp"></span>
+		if l.ConfigErrors > 0 {
+			<a class="chip fail" href={ templ.SafeURL(configPath) } style="text-decoration:none">{ "⚠ " + vocab.Count(l.ConfigErrors, "config error", "config errors") }</a>
+			&nbsp;&nbsp;
+		}
+		if l.Running > 0 {
+			<a class="chip run" href={ executionsURL(url.Values{"status": {"running"}}) } style="text-decoration:none">{ fmt.Sprintf("%s %d %s", glyph(event.Running), l.Running, word(event.Running)) }</a>
+			&nbsp;&nbsp;
+		}
+		<button type="button" class="themebtn" id="themetoggle" aria-label="Toggle dark mode" title="Toggle dark mode">
+			<svg class="sun" viewBox="0 0 20 20" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z"></path></svg>
+			<svg class="moon" viewBox="0 0 20 20" aria-hidden="true"><path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z"></path></svg>
+		</button>
+		<a id="run-tests" class="btn primary" href={ runTestsURL("", nil) }>Run a plan…</a>
+	</nav>
+}
+
+// tab is one tab of the top bar. app.js reads the tabs, in order, for keys 1
+// to 5.
+templ tab(l layout, t navTab) {
+	<a
+		class={ "tab", templ.KV("on", l.Tab == t.ID) }
+		href={ templ.SafeURL(t.Href) }
+		if l.Tab == t.ID {
+			aria-current="page"
+		}
+	>{ t.Label }</a>
+}
+
+templ overlays(l layout) {
+	@templ.Raw(`<script id="palette-data" type="application/json">` + l.Palette + `</script>`)
+	<div id="palette" class="overlay" hidden>
+		<div class="palette">
+			<input id="palette-input" placeholder="Run a plan, open an execution, go to…" autocomplete="off" aria-label="Command palette"/>
+			<div id="palette-list"></div>
+			<div class="it mute" style="border-top:1px solid var(--line-soft);font-size:12px;cursor:default">
+				<span><span class="kbd">↑↓</span> move &nbsp;<span class="kbd">enter</span> run &nbsp;<span class="kbd">esc</span> close</span>
+			</div>
+		</div>
+	</div>
+	<div id="help" class="overlay" hidden>
+		<div class="help">
+			<h3 style="margin:0 0 8px">Keys</h3>
+			<table>
+				<tr><td><span class="kbd">1</span>–<span class="kbd">5</span></td><td>Home, Executions, Plans, Testbeds, Suites</td></tr>
+				<tr><td><span class="kbd">n</span></td><td>Run a plan</td></tr>
+				<tr><td><span class="kbd">/</span></td><td>Filter</td></tr>
+				<tr><td><span class="kbd">⌘K</span> or <span class="kbd">:</span></td><td>Command palette</td></tr>
+				<tr><td><span class="kbd">f</span></td><td>Follow the running step</td></tr>
+				<tr><td><span class="kbd">?</span></td><td>This help</td></tr>
+				<tr><td><span class="kbd">esc</span></td><td>Close</td></tr>
+			</table>
+		</div>
+	</div>
+}
+
+// choice is a select option: what people read is the glossary label, and the
+// CUE value is in the tooltip for those who write the config.
+templ choice(path, value string, selected bool) {
+	<option value={ value } title={ value } selected?={ selected }>{ vocab.Choice(path, value) }</option>
+}

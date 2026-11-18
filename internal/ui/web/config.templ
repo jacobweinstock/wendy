@@ -1,0 +1,590 @@
+package web
+
+import (
+	"fmt"
+	"net/url"
+	"strings"
+
+	"github.com/tinkerbell/wendy/internal/config"
+	"github.com/tinkerbell/wendy/internal/event"
+	"github.com/tinkerbell/wendy/internal/vocab"
+)
+
+// entriesFrame is a top-bar tab that lists config entries: its subtabs (or
+// how many entries it has), a filter, the subtab's entries grouped by where
+// they are defined, and the selected entry, which the caller renders.
+templ entriesFrame(l layout, d entriesData) {
+	@shell(l, topTabOf(d.Tab).Label) {
+		<div class="page">
+			<div class="subtabs">
+				if subs := subtabsOf(d.Top); len(subs) > 1 {
+					for _, t := range subs {
+						<a
+							class={ templ.KV("on", d.Tab == t.ID) }
+							href={ entryURL(t.ID, "") }
+							if d.Tab == t.ID {
+								aria-current="true"
+							}
+						>{ t.Label }</a>
+					}
+				} else {
+					<span class="mute" style="padding:6px 0;font-size:13px">{ vocab.Count(d.Total, singular(d.Tab), plural(d.Tab)) }</span>
+				}
+				<span style="flex:1"></span>
+				if d.canEdit() {
+					<a class="btn sm" href={ editURL(d.Tab, "") }>{ "＋ New " + singular(d.Tab) }</a>
+					&nbsp;
+				}
+				<form method="get" action={ entryURL(d.Tab, "") }>
+					<input id="filter" class="input" style="min-width:180px" type="search" name="q" value={ d.Q } placeholder="Filter" aria-label="Filter this list"/>
+				</form>
+			</div>
+			<p class="lead">{ d.Sub.Blurb }</p>
+			<div class="row">
+				<div class="card tree" style="width:260px;flex:none">
+					for i, it := range d.Items {
+						if i == 0 || d.Items[i-1].Origin != it.Origin {
+							<div class="grp">{ shortPath(it.Origin) }</div>
+						}
+						<a href={ d.itemURL(it.Name) } class={ templ.KV("sel", it.Name == d.Sel) }>{ it.Name }</a>
+					}
+					if len(d.Items) == 0 {
+						<div class="mute">Nothing matches.</div>
+					}
+				</div>
+				<div class="col card">
+					if d.Sel != "" {
+						<div class="row" style="align-items:baseline;gap:10px">
+							<h2 class="title">{ d.Sel }</h2>
+							<span class="chip skip">{ shortPath(d.Origin) }</span>
+						</div>
+						{ children... }
+					} else {
+						<p class="mute">{ "No " + plural(d.Tab) + " yet." }</p>
+					}
+				</div>
+			</div>
+		</div>
+	}
+}
+
+templ plansPage(l layout, d entriesData) {
+	@entriesFrame(l, d) {
+		@planDetail(d)
+	}
+}
+
+templ testbedsPage(l layout, d entriesData) {
+	@entriesFrame(l, d) {
+		if d.Tab == config.KindTestbed {
+			@testbedDetail(d)
+		} else {
+			@partDetail(d)
+		}
+	}
+}
+
+templ suitesPage(l layout, d entriesData) {
+	@entriesFrame(l, d) {
+		switch {
+			case d.Tab == config.KindSuite:
+				@suiteDetail(d)
+			case d.Tab == config.KindTest:
+				@testDetail(d)
+			case d.Cat.Steps[d.Sel] != nil && !d.Cat.IsBuiltinStep(d.Sel):
+				@stepDetail(d)
+			default:
+				@builtinDetail(d)
+		}
+	}
+}
+
+// editAction edits the selected entry when the UI file defines it, and
+// otherwise copies it there to edit.
+templ editAction(d entriesData) {
+	if d.Editable {
+		<a class="btn" href={ editURL(d.Tab, d.Sel) }>{ "Edit " + singular(d.Tab) }</a>
+	} else {
+		<a class="btn" href={ copyURL(d.Tab, d.Sel) } title={ "Copies it into " + config.UIFile + ", where you can change it" }>Copy and edit…</a>
+	}
+}
+
+templ cueSource(src string) {
+	if src != "" {
+		<details style="margin-top:12px">
+			<summary class="btn">View CUE</summary>
+			<pre class="log" style="margin-top:8px">{ src }</pre>
+		</details>
+	}
+}
+
+// usedByCell lists what refers to an entry, each name a link, or none.
+templ usedByCell(usedBy []string, none string) {
+	if len(usedBy) == 0 {
+		<span class="mute">{ none }</span>
+	}
+	for i, u := range usedBy {
+		if i > 0 {
+			<span class="mute"> · </span>
+		}
+		{{ kind, name, href := usedByLink(u) }}
+		{ kind + " " }
+		if href != "" {
+			<a href={ href }>{ name }</a>
+		} else {
+			{ name }
+		}
+	}
+}
+
+templ kvRowView(r kvRow) {
+	<tr>
+		<th>{ r.Label }</th>
+		<td>
+			if r.Default {
+				<span class="mute">{ r.Value + " (default)" }</span>
+			} else if r.Code {
+				<span class="mono" style="white-space:pre-wrap">{ r.Value }</span>
+			} else {
+				<span style="white-space:pre-wrap">{ r.Value }</span>
+			}
+		</td>
+	</tr>
+}
+
+templ planDetail(d entriesData) {
+	if it := d.Cat.Plans[d.Sel]; it != nil {
+		{{ p := it.Value }}
+		if p.Description != "" {
+			<p>{ p.Description }</p>
+		}
+		<table class="kv">
+			<tr>
+				<th>Testbed</th>
+				<td>
+					<a href={ entryURL(config.KindTestbed, p.Testbed) }>{ p.Testbed }</a>
+					<span class="mute">{ planCombinations(d.Cat, p) }</span>
+					if len(p.Combinations) > 0 {
+						<div class="hint">Only <span class="mono">{ strings.Join(p.Combinations, " ") }</span></div>
+					}
+				</td>
+			</tr>
+			<tr>
+				<th>Suites</th>
+				<td>
+					for i, s := range p.Suites {
+						if i > 0 {
+							{ ", " }
+						}
+						<a href={ entryURL(config.KindSuite, s) }>{ s }</a>
+					}
+				</td>
+			</tr>
+			<tr>
+				<th>Only tests with labels</th>
+				<td>
+					if p.LabelFilter != "" {
+						<span class="mono">{ p.LabelFilter }</span>
+					} else {
+						<span class="mute">Every test</span>
+					}
+				</td>
+			</tr>
+			<tr><th>Options</th><td>{ optionsLine(p) }</td></tr>
+			<tr>
+				<th>Last execution</th>
+				<td>
+					if d.Last != nil {
+						<a href={ executionURL(d.Last.ID) }>{ "#" + d.Last.ID }</a>
+						<span class={ "chip", cls(d.Last.Status) }>{ glyph(d.Last.Status) + " " + word(d.Last.Status) }</span>
+						<span class="mute">{ ago(d.Last.Started) }</span>
+					} else {
+						<span class="mute">Not run yet</span>
+					}
+				</td>
+			</tr>
+		</table>
+		<div class="actions">
+			<button class="btn primary" hx-post={ apiExecutions } hx-vals={ vals("plan", d.Sel) }>Run</button>
+			<a class="btn" href={ runTestsURL(d.Sel, nil) }>Change and run…</a>
+			@editAction(d)
+		</div>
+		<p class="hint" style="margin-top:12px">Change and run changes one execution, not the plan.</p>
+		@cueSource(d.Source)
+	}
+}
+
+templ testbedDetail(d entriesData) {
+	if tb := d.Cat.Testbeds[d.Sel]; tb != nil {
+		if tb.Value.Description != "" {
+			<p>{ tb.Value.Description }</p>
+		}
+		<table class="kv">
+			<tr>
+				<th>Parts</th>
+				<td>
+					for _, p := range d.testbedParts() {
+						<div class="partrow">
+							<span class="kind">{ p.Label }</span>
+							if p.Name != "" {
+								<a href={ p.URL }>{ p.Name }</a>
+								<span class="hint">{ p.Summary }</span>
+							} else {
+								<span class="mute">Defined in this testbed</span>
+							}
+						</div>
+					}
+				</td>
+			</tr>
+			for _, row := range testbedSettings(tb) {
+				@kvRowView(row)
+			}
+			if t := tb.Resolved; t != nil {
+				<tr><th>Network extras</th><td>{ networkExtras(t) }</td></tr>
+			}
+			<tr>
+				<th>Matrix</th>
+				<td>
+					if m := tb.Value.Matrix; m != nil {
+						@matrixView(tb, m)
+						if d.Editable {
+							<div class="hint"><a href={ editURL(config.KindTestbed, d.Sel) + "#matrix" }>Edit matrix</a></div>
+						}
+					} else {
+						@matrixHint(d, tb)
+					}
+				</td>
+			</tr>
+			if t := tb.Resolved; t != nil {
+				<tr>
+					<th>Labels</th>
+					<td>
+						for _, lb := range testbedLabels(t) {
+							<span class="chip mono">{ lb }</span>&nbsp;
+						}
+						if tb.HasMatrix() {
+							<span class="hint">and each combination's values on the matrix's axes</span>
+						}
+					</td>
+				</tr>
+			}
+			<tr><th>Used by</th><td>@usedByCell(d.UsedBy, "No plan yet")</td></tr>
+		</table>
+		if t := tb.Resolved; t != nil {
+			<details style="margin-top:12px">
+				<summary class="btn">Resolved values</summary>
+				<table class="kv" style="margin-top:8px">
+					if tb.HasMatrix() {
+						<tr><th></th><td class="mute">Before the matrix: each combination changes some of these.</td></tr>
+					}
+					for _, row := range resolvedRows(t) {
+						@kvRowView(row)
+					}
+				</table>
+			</details>
+		} else {
+			<p class="fail">This testbed does not resolve. <a href={ templ.SafeURL(configPath) }>Config files</a> says why.</p>
+		}
+		<div class="actions">
+			<a class="btn primary" href={ runTestsURL("", url.Values{"testbed": {d.Sel}}) }>Run tests on this testbed…</a>
+			@editAction(d)
+		</div>
+		@cueSource(d.Source)
+	}
+}
+
+// matrixHint says how a testbed with no matrix gets one: in the file that
+// defines it, or for a built-in, in a copy.
+templ matrixHint(d entriesData, tb *config.TestbedItem) {
+	<span class="mute">None: one combination.</span>
+	if tb.Origin == config.BuiltIn {
+		<div class="hint">To test several combinations, use Copy and edit… and give the copy a matrix.</div>
+	} else {
+		<div class="hint">To test several combinations, give it a matrix in <span class="mono">{ shortPath(tb.Origin) }</span>, for example:</div>
+		<pre class="log" style="margin-top:6px">{ matrixExample(d.Cat, d.Sel) }</pre>
+		if d.Editable {
+			<div class="hint">Or add one with <a href={ editURL(config.KindTestbed, d.Sel) }>Edit testbed</a>.</div>
+		}
+	}
+}
+
+// matrixView is what each axis value of a testbed's matrix changes, then the
+// combinations it makes.
+templ matrixView(tb *config.TestbedItem, m *config.Matrix) {
+	<table>
+		for _, a := range matrixRows(m) {
+			<tr>
+				<td class="mono">{ a.Axis }</td>
+				<td>
+					for i, v := range a.Values {
+						if i > 0 {
+							&nbsp;·&nbsp;
+						}
+						<span class="mono">{ v.Name }</span> →
+						if len(v.Changes) == 0 {
+							<span class="mute">no change</span>
+						}
+						for j, c := range v.Changes {
+							if j > 0 {
+								{ ", " }
+							}
+							if c.URL != "" {
+								{ c.Label + " " }
+								<a href={ c.URL }>{ c.Value }</a>
+							} else {
+								{ c.Label + ": " + c.Value }
+							}
+						}
+					}
+				</td>
+			</tr>
+		}
+	</table>
+	<div class="hint" style="margin-top:4px">
+		{ vocab.Count(len(runnable(tb)), "combination", "combinations") + ": " }
+		<span class="mono">{ strings.Join(runnable(tb), ", ") }</span>
+	</div>
+	for _, c := range excludedCombinations(tb) {
+		<div class="hint">Left out: <span class="mono">{ c.Name }</span> { c.Excluded }</div>
+	}
+}
+
+templ partDetail(d entriesData) {
+	if it := d.Cat.Parts(d.Tab)[d.Sel]; it != nil {
+		{{ common, advanced, atDefault := partSettings(d.Tab, it.Value) }}
+		<p class="mute" style="margin-top:4px">{ partSummaryOf(d.Cat, d.Tab, d.Sel) }</p>
+		<table class="kv">
+			for _, r := range common {
+				@kvRowView(r)
+			}
+			if d.Tab == config.KindHardware {
+				<tr>
+					<th>Machines</th>
+					<td>
+						for _, line := range machineLines(it.Value) {
+							<div>{ line }</div>
+						}
+					</td>
+				</tr>
+			}
+			for _, r := range advanced {
+				@kvRowView(r)
+			}
+			if atDefault > 0 {
+				<tr><th></th><td class="mute">{ vocab.Count(atDefault, "advanced setting", "advanced settings") + " at the default" }</td></tr>
+			}
+			<tr><th>Used by</th><td>@usedByCell(d.UsedBy, "No testbed yet")</td></tr>
+		</table>
+		<div class="actions">
+			@editAction(d)
+		</div>
+		@cueSource(d.Source)
+	}
+}
+
+templ suiteDetail(d entriesData) {
+	if it := d.Cat.Suites[d.Sel]; it != nil {
+		if it.Value.Description != "" {
+			<p>{ it.Value.Description }</p>
+		}
+		<table class="kv">
+			<tr>
+				<th>Tests, in order</th>
+				<td>
+					for i, t := range it.Value.Tests {
+						<div>
+							{ fmt.Sprintf("%d. ", i+1) }
+							<a href={ entryURL(config.KindTest, t) }>{ t }</a>
+							if tc := d.Cat.Tests[t]; tc != nil && tc.Value.Description != "" {
+								<span class="hint">{ tc.Value.Description }</span>
+							}
+						</div>
+					}
+				</td>
+			</tr>
+			<tr><th>Used by</th><td>@usedByCell(d.UsedBy, "No plan yet")</td></tr>
+		</table>
+		<div class="actions">
+			<a class="btn primary" href={ runTestsURL("", url.Values{"suite": {d.Sel}}) }>Run this suite…</a>
+			@editAction(d)
+		</div>
+		@cueSource(d.Source)
+	}
+}
+
+templ testDetail(d entriesData) {
+	if it := d.Cat.Tests[d.Sel]; it != nil {
+		if it.Value.Description != "" {
+			<p>{ it.Value.Description }</p>
+		}
+		<table class="kv">
+			<tr>
+				<th>Steps</th>
+				<td>
+					for i, st := range stepViews(it.Value.Steps) {
+						<div>
+							{ fmt.Sprintf("%d. ", i+1) }
+							if st.Name != "" {
+								{ st.Name + " " }
+							}
+							if st.Uses != "" {
+								<a class="mono" href={ entryURL(config.KindStep, st.Uses) }>{ st.Uses }</a>
+							}
+							<span class="mute">
+								{ " " + st.Kind }
+								if st.Detail != "" {
+									· <span class="mono">{ st.Detail }</span>
+								}
+								{ " · times out after " + st.Timeout }
+							</span>
+						</div>
+					}
+				</td>
+			</tr>
+			if n := it.Value.Requires.Spare; n > 0 {
+				<tr><th>Needs</th><td>{ vocab.Count(n, "spare machine", "spare machines") }</td></tr>
+			}
+			<tr>
+				<th>Labels</th>
+				<td>
+					for _, lb := range it.Value.Labels {
+						<span class="chip mono">{ lb }</span>&nbsp;
+					}
+					if len(it.Value.Labels) == 0 {
+						<span class="mute">None</span>
+					}
+				</td>
+			</tr>
+			if it.Value.Once {
+				<tr><th>Once per testbed</th><td>Later suites that list it reuse its result.</td></tr>
+			}
+			<tr><th>Used by</th><td>@usedByCell(d.UsedBy, "No suite yet")</td></tr>
+		</table>
+		<div class="actions">
+			@editAction(d)
+		</div>
+		@cueSource(d.Source)
+	}
+}
+
+templ builtinDetail(d entriesData) {
+	if b := d.builtin(); b != nil {
+		<p>{ b.Description }</p>
+		<table class="kv">
+			<tr><th>Parameters</th><td><pre class="log">{ b.Schema }</pre></td></tr>
+			<tr><th>Used by</th><td>@usedByCell(d.UsedBy, "Nothing yet")</td></tr>
+		</table>
+		<p class="hint" style="margin-top:12px">
+			To use it, edit a test, add a step, choose <b>Named step</b> and pick <span class="mono">{ b.ID }</span>.
+			To use it with the same parameters in many tests, make it a step of yours.
+		</p>
+	}
+}
+
+// stepDetail is one of the user's steps: what it runs, and the tests that
+// use it.
+templ stepDetail(d entriesData) {
+	if it := d.Cat.Steps[d.Sel]; it != nil {
+		{{ v := stepViews([]config.Step{it.Value})[0] }}
+		<table class="kv">
+			<tr>
+				<th>What it runs</th>
+				<td>
+					if v.Uses != "" {
+						<a class="mono" href={ entryURL(config.KindStep, v.Uses) }>{ v.Uses }</a>
+					}
+					<span class="mute">
+						{ " " + v.Kind }
+						if v.Detail != "" {
+							· <span class="mono">{ v.Detail }</span>
+						}
+					</span>
+				</td>
+			</tr>
+			<tr><th>Times out after</th><td>{ v.Timeout }</td></tr>
+			if it.Value.Retries > 0 {
+				<tr><th>Retries</th><td>{ fmt.Sprint(it.Value.Retries) }</td></tr>
+			}
+			if it.Value.When != "" {
+				<tr><th>Only on combinations with labels</th><td class="mono">{ it.Value.When }</td></tr>
+			}
+			<tr><th>Used by</th><td>@usedByCell(d.UsedBy, "No test yet")</td></tr>
+		</table>
+		<p class="hint" style="margin-top:12px">
+			To use it, edit a test, add a step, choose <b>Named step</b> and pick <span class="mono">{ d.Sel }</span>.
+			The test can set its own name, timeout, retries and labels over the step's.
+		</p>
+		<div class="actions">
+			@editAction(d)
+		</div>
+		@cueSource(d.Source)
+	}
+}
+
+// Config files.
+templ configPage(l layout, cat *config.Catalog, loose []config.Error, starter, uiFile string) {
+	@shell(l, "Config files") {
+		<div class="page">
+			<h2 class="title">Config files</h2>
+			<p class="mute">
+				Watching
+				for i, dir := range cat.Dirs {
+					if i > 0 {
+						{ " and " }
+					}
+					<span class="mono">{ shortPath(dir) }</span>
+				}
+				{ " · last reload " + cat.LoadedAt.Format("15:04:05") }
+				if len(cat.AllErrors()) > 0 {
+					· <span class="fail">{ vocab.Count(len(cat.AllErrors()), "error", "errors") }</span>
+				}
+				<button class="btn sm" hx-post={ apiReload }>Reload now</button>
+			</p>
+			if len(cat.Files) == 0 && len(loose) == 0 {
+				<div class="card empty">
+					<p>No config files yet, so Wendy has only its built-ins.</p>
+					<button class="btn" hx-post={ apiStarter }>{ "Create " + shortPath(starter) }</button>
+				</div>
+			} else {
+				<div class="card">
+					for _, f := range cat.Files {
+						<div style="margin-top:6px">
+							if len(f.Errors) == 0 {
+								<span class={ cls(event.Passed) }>{ glyph(event.Passed) }</span>
+							} else {
+								<span class={ cls(event.Failed) }>{ glyph(event.Failed) }</span>
+							}
+							<span class="mono">{ shortPath(f.Path) }</span>
+						</div>
+						for _, e := range f.Errors {
+							@errLine(e)
+						}
+					}
+					for _, e := range loose {
+						@errLine(e)
+					}
+				</div>
+			}
+			switch {
+				case len(cat.AllErrors()) == 0:
+					<p class="mute">Wendy reloads these files when they change. The UIs write only to <span class="mono">{ uiFile }</span>.</p>
+				case cat.Stale:
+					<p>The last valid config is still in use, so everything else keeps working. Fix the file and save; Wendy reloads it.</p>
+				default:
+					<p>Fix the file and save; Wendy reloads it.</p>
+			}
+		</div>
+	}
+}
+
+templ errLine(e config.Error) {
+	<div class="err-line">
+		if errPos(e) != "" {
+			<b>{ errPos(e) }</b>&nbsp;
+		}
+		if e.Path != "" {
+			{ e.Path + ": " }
+		}
+		{ e.Msg }
+	</div>
+}

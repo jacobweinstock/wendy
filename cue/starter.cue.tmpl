@@ -1,0 +1,89 @@
+// Wendy configuration. Wendy reloads this file as you save it.
+//
+// Everything here is unified with wendy.#Config; `wendy vet` and Config
+// files show any error with its file:line. Delete what you don't need.
+package local
+
+import "github.com/tinkerbell/wendy/cue/wendy"
+
+wendy.#Config & {
+	// A testbed is what tests run on: one named part of each kind. A part left
+	// out is its kind's built-in: chart-latest, capi-1.14-capt-0.7, kind,
+	// k8s-1.36 and small.
+	//
+	// Parts are small and reusable. Change one and every testbed that names it
+	// changes with it; the others are untouched.
+	//   tinkerbell:        how Tinkerbell is installed (chart or source build)
+	//   clusterAPI:        Cluster API and CAPT, as releases or builds
+	//   managementCluster: the cluster Cluster API is installed on
+	//   workloadCluster:   the cluster to deploy (Kubernetes version, CNI)
+	//   hardware:          the machines (counts and sizes), BMC and libvirt
+	//
+	// A testbed also sets what more than one part reads:
+	// topology, bootMode and network (family, nat64, mirror).
+	//
+	// parts: tinkerbell: stable: chart: version: "latest"
+	// parts: tinkerbell: dev: source: repo: "~/repos/tinkerbell/tinkerbell" // or build from a checkout (working tree as-is)
+	// parts: clusterAPI: edge: {
+	// 	core: "v1.14.4"
+	// 	capt: source: repo: "~/repos/tinkerbell/cluster-api-provider-tinkerbell"
+	// }
+	// parts: workloadCluster: next: kubernetesVersion: "v1.37.0"
+	// parts: hardware: ha: machines: {controlPlane: count: 3, worker: count: 3}
+	testbeds: mine: {
+		description: "Every part built in"
+		// tinkerbell:      "stable"
+		// clusterAPI:      "edge"
+		// workloadCluster: "next"
+		// hardware:        "ha"
+	}
+
+	// Your own tests mix built-in steps with anything you can run in a
+	// container or as a command.
+	// tests: "my-smoke": {
+	// 	description: "Our app runs on a freshly provisioned cluster"
+	// 	steps: [
+	// 		{name: "deploy-app", container: image: "ghcr.io/acme/e2e-smoke:v1.4.0"},
+	// 		{name: "policies", chainsaw: path: "chainsaw/policies"},
+	// 	]
+	// }
+
+	// The built-in upgrade tests have no target, so they skip. Copy one and
+	// say what to upgrade to:
+	// tests: "upgrade-to-1.37": {
+	// 	description: "Rolls the workload cluster to Kubernetes v1.37.0"
+	// 	requires: spare: 1
+	// 	steps: [
+	// 		{uses: "capt.upgrade.kubernetes", timeout: "60m", with: version: "v1.37.0"},
+	// 		{uses: "assert.healthy", timeout: "20m"},
+	// 	]
+	// }
+
+	// A matrix makes a testbed several combinations, one for each choice of a
+	// value on every axis. An axis value overrides the testbed's own fields,
+	// written as the testbed writes them: a setting, a part picked by name, or
+	// a part's fields.
+	// testbeds: versions: matrix: {
+	// 	order: ["ipFamily", "k8s", "size"]
+	// 	axes: {
+	// 		ipFamily: {ipv4: network: family: "ipv4", ipv6: network: family: "ipv6"}
+	// 		k8s: {current: {}, next: workloadCluster: "next"}
+	// 		size: {small: {}, big: hardware: machines: worker: count: 3}
+	// 	}
+	// }
+
+	// A plan says what to test, where and how: the suites, the testbed, and
+	// options such as keeping the testbed up when an execution fails. Home
+	// lists the plans, each a key away. A plan also says when an execution
+	// collects diagnostics (the clusters' state, Tinkerbell's objects, BMC
+	// logs): on failure ("onFailure"), "always" or "never", and whether it
+	// captures the machines' consoles.
+	plans: mine: {
+		description: "my testbed · smoke"
+		testbed:     "mine"
+		suites: ["smoke"]
+		keep: "failed"
+		// diagnostics: "always"
+		// consoles:    false
+	}
+}

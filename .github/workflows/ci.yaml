@@ -1,0 +1,73 @@
+name: For each commit and PR
+on:
+  push:
+    branches:
+      - "main"
+  pull_request:
+
+permissions:
+  contents: read
+
+# Actions are pinned by commit SHA, with the version in a comment, so a moved
+# tag cannot change what runs.
+
+jobs:
+  validation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Lint
+        run: make lint
+
+      - name: Check generated files
+        run: make verify-generate
+
+      - name: Test
+        run: make test
+
+      - name: Check the release config
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: "~> v2"
+          args: check
+
+  # One combination per PR; nightly.yaml runs the longer suites.
+  smoke:
+    name: Self-e2e (smoke)
+    needs: validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Prepare the host
+        uses: ./.github/actions/e2e-host
+
+      - name: Build
+        run: make build
+
+      - name: Run smoke
+        run: ./bin/wendy run --profile quickstart --plain --data "$RUNNER_TEMP/wendy"
+
+      # A run directory is self-contained: download it and browse it with
+      # wendy serve --data <dir>.
+      - name: Upload the run
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: smoke-run
+          path: ${{ runner.temp }}/wendy/runs
+          if-no-files-found: ignore

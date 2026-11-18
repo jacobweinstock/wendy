@@ -1,0 +1,492 @@
+package web
+
+import (
+	"strconv"
+	"strings"
+
+	"github.com/tinkerbell/wendy/internal/config"
+	"github.com/tinkerbell/wendy/internal/ui"
+	"github.com/tinkerbell/wendy/internal/vocab"
+)
+
+// Edit forms for testbeds, parts, tests, suites and steps.
+templ editPage(l layout, d editData) {
+	@shell(l, d.title()) {
+		<div class="crumbs">
+			<a href={ templ.SafeURL(topTabOf(d.Kind).Href) }>{ topTabOf(d.Kind).Label }</a> ›
+			if tabLabel(d.Kind) != topTabOf(d.Kind).Label {
+				<a href={ entryURL(d.Kind, "") }>{ tabLabel(d.Kind) }</a> ›
+			}
+			{ d.title() }
+		</div>
+		<form id="editform" hx-post={ string(editURL(d.Kind, "")) } hx-swap="none" data-unsaved>
+			<input type="hidden" name="orig" value={ d.Orig }/>
+			<input type="hidden" name="from" value={ d.From }/>
+			<div class="page" style="padding-bottom:70px">
+				<h2 class="title">{ d.title() }</h2>
+				<p class="lead" style="margin-top:6px">{ tabBlurb(d.Kind) }</p>
+				if d.Mode == "copy" && d.Origin == config.BuiltIn {
+					<div class="note">{ d.From + " is built in. Your copy is saved under a new name in " }<span class="mono">{ d.UIFile }</span>.</div>
+				}
+				@nameField(d)
+				switch d.Kind {
+					case config.KindTestbed:
+						@testbedFields(d)
+					case config.KindTest:
+						for _, f := range d.fields() {
+							@fieldRow(f, ui.Get(d.Value, f), "f."+f.Path, d.Uses)
+						}
+						<div class="h4">Steps</div>
+						<p class="hint">
+							A test runs its steps in order. Each is a named step (built in, or one of yours), a command, a container, Chainsaw tests or a Ginkgo test binary.
+							@newTabLink(entryURL(config.KindStep, ""), "Steps")
+						</p>
+						<div id="steps">
+							for _, st := range d.Steps {
+								@stepRow(st, d.Uses)
+							}
+						</div>
+						<button type="button" class="btn" hx-get={ editStepPath } hx-vals="js:{i: Date.now()}" hx-target="#steps" hx-swap="beforeend">＋ Add step</button>
+					case config.KindStep:
+						<div class="h4">What it runs</div>
+						<p class="hint">A step of yours can use a built-in step with its parameters set, or run a command, a container, Chainsaw tests or a Ginkgo test binary.</p>
+						<div id="steps">
+							for _, st := range d.Steps {
+								@stepRow(st, d.Uses)
+							}
+						</div>
+					case config.KindTinkerbell, config.KindClusterAPI, config.KindManagementCluster, config.KindWorkloadCluster, config.KindHardware:
+						@partFields(d)
+					default:
+						for _, f := range d.fields() {
+							@fieldRow(f, ui.Get(d.Value, f), "f."+f.Path, d.Uses)
+						}
+						<div class="field top">
+							<span class="hint">
+								Tests to add; click one:&nbsp;
+								for _, n := range d.Tests {
+									<button type="button" class="chip skip pick" data-append={ n } data-into="f.tests">{ n }</button>
+								}
+							</span>
+						</div>
+				}
+			</div>
+			<div class="savebar">
+				<span class="mute" style="font-size:12px;margin-right:auto">Saved to <span class="mono">{ d.UIFile }</span>. Wendy checks it against the schema first.</span>
+				@deleteAction(d)
+				<a class="btn" href={ d.backURL() }>Cancel</a>
+				<button class="btn primary" type="submit">{ "Save " + singular(d.Kind) }</button>
+			</div>
+		</form>
+		if d.Kind == config.KindTestbed {
+			// A form can't hold another, so the part dialog's form sits here,
+			// beside the testbed's, which it leaves as it is.
+			<dialog id="partdialog" class="dialog" aria-labelledby="partdialog-title"></dialog>
+		}
+	}
+}
+
+// deleteAction deletes the entry being edited, or says why it can't be
+// deleted. A new entry or a copy has nothing to delete.
+templ deleteAction(d editData) {
+	if d.Mode == "edit" {
+		if len(d.UsedBy) > 0 {
+			<button type="button" class="btn danger" disabled>{ "Delete " + singular(d.Kind) }</button>
+			<span class="disabled-why">{ "Used by " + strings.Join(d.UsedBy, ", ") + ", so it can't be deleted." }</span>
+		} else {
+			<button
+				type="button"
+				class="btn danger"
+				hx-post={ string(editURL(d.Kind, d.Orig)) + "/delete" }
+				hx-confirm={ "Delete " + singular(d.Kind) + " " + d.Orig + "? It is removed from " + d.UIFile + "." }
+				hx-swap="none"
+			>{ "Delete " + singular(d.Kind) }</button>
+		}
+	}
+}
+
+// testbedFields is a testbed's form: a description, one picker for each kind
+// of part, and the settings no single part owns. What a part holds is edited
+// on the part. A matrix is shown but not edited: saving keeps it as written.
+templ testbedFields(d editData) {
+	for _, f := range d.fields() {
+		if f.Path == "description" {
+			@fieldRow(f, ui.Get(d.Value, f), "f."+f.Path, d.Uses)
+		}
+	}
+	<div class="h4">Parts</div>
+	<p class="hint">Pick one of each kind. A part is shared: change it once and every testbed that picks it changes.</p>
+	for _, kind := range config.PartKinds {
+		@partPicker(d, kind)
+	}
+	<div class="h4">Settings</div>
+	<p class="hint">Keep the defaults unless you are testing one of these. A matrix can test every choice.</p>
+	for _, f := range d.commonFields() {
+		@fieldRow(f, ui.Get(d.Value, f), "f."+f.Path, d.Uses)
+	}
+	<details class="adv" open?={ d.advancedSet() }>
+		<summary>Advanced settings</summary>
+		for _, f := range d.advancedFields() {
+			@fieldRow(f, ui.Get(d.Value, f), "f."+f.Path, d.Uses)
+		}
+	</details>
+	<div class="h4" id="matrix">Matrix</div>
+	if rows, ok := d.matrixRows(); ok {
+		<p class="hint">Vary a part or a setting to test several combinations at once. Each axis's values override the testbed's own.</p>
+		@matrixEditor(d, rows)
+	} else if tb := d.matrixTestbed(); tb != nil {
+		@matrixView(tb, tb.Value.Matrix)
+		<p class="hint">This matrix sets more than the editor shows, so it is written in CUE. Saving keeps it as it is.</p>
+	}
+}
+
+// matrixEditor edits a testbed's axes, and lists the combinations they make
+// as they change, each of which can be left out.
+templ matrixEditor(d editData, rows []axisRow) {
+	<input type="hidden" name="matrixSet" value="1"/>
+	<div id="axes">
+		for _, row := range rows {
+			@axisRowView(row)
+		}
+	</div>
+	<button type="button" class="btn" hx-get={ matrixAxisPath } hx-vals="js:{i: Date.now()}" hx-target="#axes" hx-swap="beforeend">＋ Vary a part or setting</button>
+	<div id="combinations" style="margin-top:12px" hx-post={ matrixCombinationsPath } hx-trigger="change from:#editform delay:200ms" hx-include="#editform" hx-swap="innerHTML">
+		@combinationList(d.combinations(rows))
+	</div>
+}
+
+// axisRowView is one axis: its name, what it varies, and a checkbox for each
+// value it can take. Changing what it varies asks the server for its values.
+templ axisRowView(row axisRow) {
+	<div class="step axis">
+		<input type="hidden" name="ax" value={ row.Idx }/>
+		<div class="stephead">
+			<input class="input mono" style="width:10em" name={ "ax" + row.Idx + ".name" } value={ row.Name } aria-label="Axis name"/>
+			<select class="input" name={ "ax" + row.Idx + ".varies" } aria-label="What this axis varies" hx-get={ matrixAxisPath } hx-include="closest .axis" hx-vals={ vals("i", row.Idx) } hx-target="closest .axis" hx-swap="outerHTML">
+				for _, c := range variesChoices() {
+					<option value={ c.ID } selected?={ c.ID == row.Varies }>{ c.Label }</option>
+				}
+			</select>
+			<span style="flex:1"></span>
+			<button type="button" class="btn sm" data-move="-1" title="move up">↑</button>
+			<button type="button" class="btn sm" data-move="1" title="move down">↓</button>
+			<button type="button" class="btn sm danger" data-remove>Remove</button>
+		</div>
+		<div class="facet">
+			for _, o := range row.Options {
+				<label><input type="checkbox" name={ "ax" + row.Idx + ".v" } value={ o.ID } checked?={ o.On }/><span class="chip">{ o.Label }</span></label>
+				if o.Name != o.ID {
+					<input type="hidden" name={ "ax" + row.Idx + ".as." + o.ID } value={ o.Name }/>
+				}
+			}
+			if len(row.Options) == 0 {
+				<span class="hint">There is nothing of this kind to pick yet.</span>
+			}
+		</div>
+	</div>
+}
+
+// combinationList lists the combinations a matrix makes. Leaving one out
+// takes a reason, which the testbed's page shows.
+templ combinationList(rows []comboRow) {
+	if len(rows) == 0 {
+		<p class="hint">None yet: this testbed is one combination.</p>
+	} else {
+		<p class="hint">{ vocab.Count(len(rows), "combination", "combinations") + ", named by their values in axis order. Leave out any that can't work." }</p>
+		<table>
+			for _, c := range rows {
+				<tr>
+					<td class="mono">{ c.Name }</td>
+					<td><label class="check"><input type="checkbox" name={ "ex." + c.Name } checked?={ c.Out }/> Leave out</label></td>
+					<td><input class="input" name={ "ex." + c.Name + ".reason" } value={ c.Reason } placeholder="why" aria-label={ "Why " + c.Name + " is left out" }/></td>
+				</tr>
+			}
+		</table>
+	}
+}
+
+// formProblem is a problem with what a form posted, shown where the answer
+// goes.
+templ formProblem(msg string) {
+	<p class="fail">{ capital(msg) }</p>
+}
+
+// partPicker chooses the part a testbed uses of one kind, under a line on
+// what the kind is. The summary under it is filled in on the server, and
+// htmx refreshes it, with the Open link, when the choice changes. New … part…
+// makes a part in a dialog, whose save replaces this picker with the new part
+// picked.
+templ partPicker(d editData, kind string) {
+	{{ chosen := d.pickerValue(kind) }}
+	<div class="field top" id={ "picker-" + kind }>
+		<label class="k" for={ "p-" + kind }>{ kindLabel(kind) }</label>
+		<span class="ctl">
+			<span class="hint" id={ "about-" + kind }>{ tabBlurb(kind) }</span>
+			<select
+				id={ "p-" + kind }
+				class="input"
+				name={ "p." + kind }
+				aria-describedby={ "about-" + kind + " sum-" + kind }
+				hx-get={ partSummaryPath }
+				hx-trigger="change"
+				hx-target={ "#sum-" + kind }
+				hx-swap="innerHTML"
+				hx-vals={ vals("kind", kind) }
+			>
+				if chosen == inlineChoice {
+					<option value={ inlineChoice } selected>inline (written in the config file)</option>
+				}
+				<option value="" selected?={ chosen == "" }>{ d.Cat.Fallback[kind] + " (default)" }</option>
+				for _, n := range d.partChoices(kind) {
+					<option value={ n } selected?={ n == chosen }>{ n }</option>
+				}
+			</select>
+			<span class="hint" id={ "sum-" + kind } aria-live="polite">{ d.pickerSummary(kind) }</span>
+			<span class="hint">
+				@pickedLink(kind, d.openPart(kind), false)
+				<button type="button" class="linkbtn" hx-get={ partDialogURL(kind) } hx-target="#partdialog" hx-swap="innerHTML" aria-haspopup="dialog">New { singular(kind) }…</button>
+			</span>
+			if raw := d.inlineJSON(kind); raw != "" {
+				<input type="hidden" name={ "inline." + kind } value={ raw }/>
+			}
+		</span>
+	</div>
+}
+
+// pickedLink opens the part a picker shows. A part written in the config file
+// has no page, so it has no link. A picker's summary reply swaps it out of
+// band as the choice changes.
+templ pickedLink(kind, name string, oob bool) {
+	<span
+		id={ "open-" + kind }
+		if oob {
+			hx-swap-oob="true"
+		}
+	>
+		if name != "" {
+			@newTabLink(entryURL(kind, name), "Open")
+			{ " · " }
+		}
+	</span>
+}
+
+// pickerSummary answers a picker's change: the summary of the part it now
+// shows, and that part's Open link.
+templ pickerSummary(kind, text, open string) {
+	{ text }
+	@pickedLink(kind, open, true)
+}
+
+// newTabLink leads away from a form in a new tab, so the form keeps what was
+// typed.
+templ newTabLink(href templ.SafeURL, text string) {
+	<a href={ href } target="_blank" rel="noopener">{ text }<span aria-hidden="true">{ " ↗" }</span><span class="sr">{ " (opens in a new tab)" }</span></a>
+}
+
+// partDialog makes a part without leaving the testbed form: the part's form,
+// shown in the testbed form's dialog. Saving puts the new part in its picker.
+templ partDialog(d editData) {
+	<form id="partform" hx-post={ string(editURL(d.Kind, "")) } hx-vals={ vals("then", "picker") } hx-swap="none">
+		<h2 class="title" id="partdialog-title">{ d.title() }</h2>
+		<p class="lead" style="margin-top:6px">{ tabBlurb(d.Kind) }</p>
+		<div id="dialog-error" role="alert"></div>
+		@nameField(d)
+		@partFields(d)
+		<div class="actions">
+			<span class="mute" style="font-size:12px;margin-right:auto">Saved to <span class="mono">{ d.UIFile }</span>.</span>
+			<button type="button" class="btn" data-close-dialog>Cancel</button>
+			<button class="btn primary" type="submit">{ "Save " + singular(d.Kind) }</button>
+		</div>
+	</form>
+}
+
+// partFields is a part's settings: the ones a typical part sets, the machine
+// table for hardware, and the rest folded under "Advanced".
+templ partFields(d editData) {
+	<div class="h4">Settings</div>
+	for _, f := range d.commonFields() {
+		@fieldRowAs(f, ui.Get(d.Value, f), d.IDPrefix+"f."+f.Path, "f."+f.Path, d.Uses)
+	}
+	if d.Kind == config.KindHardware {
+		@machineTable(d.Value, d.IDPrefix)
+	}
+	if len(d.advancedFields()) > 0 {
+		<details class="adv" open?={ d.advancedSet() }>
+			<summary>Advanced settings</summary>
+			for _, f := range d.advancedFields() {
+				@fieldRowAs(f, ui.Get(d.Value, f), d.IDPrefix+"f."+f.Path, "f."+f.Path, d.Uses)
+			}
+		</details>
+	}
+}
+
+// machineTable is the machine sets of a hardware part: how many of each role,
+// and how big. idPrefix sets its IDs apart from another form's on the page.
+templ machineTable(v map[string]any, idPrefix string) {
+	<div class="field top">
+		<span class="k" id={ idPrefix + "machines-label" }>Machines</span>
+		<table class="machines" aria-labelledby={ idPrefix + "machines-label" }>
+			<tr>
+				<th scope="col"><span class="sr">Role</span></th>
+				for _, c := range ui.MachineColumns {
+					<th scope="col">{ c.Label }</th>
+				}
+			</tr>
+			for _, r := range ui.MachineRoles {
+				<tr>
+					<th scope="row">{ r.Label }</th>
+					for _, c := range ui.MachineColumns {
+						{{ f := ui.MachineField(r.Key, c.Key) }}
+						<td>
+							<input class="input num" type="number" min="0" name={ "f." + f.Path } value={ ui.Get(v, f) } placeholder={ f.Default } aria-label={ r.Label + " " + strings.ToLower(c.Label) }/>
+						</td>
+					}
+				</tr>
+			}
+		</table>
+		<span class="hint">Blank takes the default shown.</span>
+	</div>
+}
+
+templ nameField(d editData) {
+	<div class="field">
+		<label class="k" for={ d.IDPrefix + "f-name" }>Name <b class="fail" title="required">*</b></label>
+		<span class="ctl">
+			<input id={ d.IDPrefix + "f-name" } class="input" name="name" value={ d.Name } required autocomplete="off"/>
+			<span class="hint">Letters, digits, <span class="mono">.</span> <span class="mono">_</span> and <span class="mono">-</span>.</span>
+			if d.Mode == "copy" && d.Origin != config.BuiltIn {
+				<span class="hint">
+					Copied from <b>{ d.From }</b>
+					if d.Origin != "" {
+						({ shortPath(d.Origin) })
+					}
+					. The original is not changed.
+				</span>
+			}
+		</span>
+	</div>
+}
+
+templ fieldRow(f ui.Field, value, name string, uses []string) {
+	@fieldRowAs(f, value, name, name, uses)
+}
+
+// fieldRowAs is a field whose control's ID is id, which a form shown beside
+// another sets apart from that form's. A choice whose options need
+// explaining is listed as radios, each with what it does.
+templ fieldRowAs(f ui.Field, value, id, name string, uses []string) {
+	if f.Kind == ui.FSelect && f.Default != "" && vocab.Described(f.Path) {
+		@choiceList(f, value, name)
+	} else {
+		<div
+			class="field top"
+			if len(f.Only) > 0 {
+				data-only={ strings.Join(f.Only, " ") }
+			}
+		>
+			<label class="k" for={ id }>
+				{ f.Label }
+				if f.Required {
+					<b class="fail" title="required">*</b>
+				}
+			</label>
+			<span class="ctl">
+				switch f.Kind {
+					case ui.FSelect:
+						<select id={ id } class="input" name={ name }>
+							<option value="">{ ui.DefaultLabel(f) }</option>
+							for _, o := range selectOptions(f, uses) {
+								@choice(f.Path, o, o == value)
+							}
+						</select>
+					case ui.FBool:
+						<select id={ id } class="input" name={ name }>
+							<option value="">{ ui.DefaultLabel(f) }</option>
+							for _, o := range ui.Choices(f) {
+								<option value={ o } selected?={ o == value }>{ ui.ChoiceLabel(f, o) }</option>
+							}
+						</select>
+					case ui.FInt:
+						<input id={ id } class="input num" type="number" min="0" name={ name } value={ value } placeholder={ f.Default }/>
+					case ui.FLines, ui.FMap, ui.FYAML:
+						<textarea id={ id } class="input mono" rows={ textRows(value) } name={ name } placeholder={ f.Default } spellcheck="false">{ value }</textarea>
+					default:
+						<input id={ id } class="input" name={ name } value={ value } placeholder={ f.Default } autocomplete="off"/>
+				}
+				if f.Help != "" {
+					<span class="hint">{ f.Help }</span>
+				}
+			</span>
+		</div>
+	}
+}
+
+// choiceList is a select field as radios, each choice with what it does and
+// when to pick it, so people can compare them without opening a menu. The
+// default leads, and its radio posts "", so picking it writes nothing, as a
+// dropdown's default does.
+templ choiceList(f ui.Field, value, name string) {
+	<fieldset class="field top choices">
+		<legend class="k">{ f.Label }</legend>
+		if f.Help != "" {
+			<span class="hint">{ f.Help }</span>
+		}
+		<label class="opt">
+			<input type="radio" name={ name } value="" checked?={ value == "" || value == f.Default }/>
+			<span>
+				{ vocab.Choice(f.Path, f.Default) } <span class="mute">(default)</span>
+				<span class="hint">{ vocab.ChoiceHelp(f.Path, f.Default) }</span>
+			</span>
+		</label>
+		for _, o := range ui.Choices(f) {
+			<label class="opt">
+				<input type="radio" name={ name } value={ o } checked?={ o == value }/>
+				<span>
+					{ vocab.Choice(f.Path, o) }
+					<span class="hint">{ vocab.ChoiceHelp(f.Path, o) }</span>
+				</span>
+			</label>
+		}
+	</fieldset>
+}
+
+func textRows(value string) string {
+	return strconv.Itoa(min(max(strings.Count(value, "\n")+1, 2), 12))
+}
+
+// selectOptions are a select field's choices after its default: the field's
+// own, or for a step's `uses` the named steps it can use.
+func selectOptions(f ui.Field, uses []string) []string {
+	if f.Path != "uses" {
+		return ui.Choices(f)
+	}
+	return uses
+}
+
+templ stepRow(st stepData, uses []string) {
+	<div class="step" data-kind={ st.Kind }>
+		<input type="hidden" name="step" value={ st.Idx }/>
+		<div class="stephead">
+			if !st.Single {
+				<b class="stepnum"></b>
+			}
+			<select class="input stepkind" name={ "s" + st.Idx + ".kind" } aria-label="What this step runs">
+				for _, k := range ui.StepKinds {
+					@choice("step.kind", k, k == st.Kind)
+				}
+			</select>
+			if !st.Single {
+				<span style="flex:1"></span>
+				<button type="button" class="btn sm" data-move="-1" title="move up">↑</button>
+				<button type="button" class="btn sm" data-move="1" title="move down">↓</button>
+				<button type="button" class="btn sm danger" data-remove>Remove</button>
+			}
+		</div>
+		for _, k := range ui.StepKinds {
+			<div class="hint" data-only={ k }>{ ui.StepKindHelp[k] }</div>
+		}
+		for _, f := range ui.StepFields {
+			@fieldRow(f, ui.Get(st.Value, f), "s"+st.Idx+"."+f.Path, uses)
+		}
+	</div>
+}

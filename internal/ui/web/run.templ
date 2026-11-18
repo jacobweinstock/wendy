@@ -1,0 +1,338 @@
+package web
+
+import (
+	"fmt"
+	"slices"
+	"strings"
+
+	"github.com/tinkerbell/wendy/internal/config"
+	"github.com/tinkerbell/wendy/internal/service"
+	"github.com/tinkerbell/wendy/internal/vocab"
+)
+
+// Run a plan: a saved plan, changed or not, or a blank one, which is not
+// saved unless asked.
+templ runTestsPage(l layout, d runTestsData) {
+	@shell(l, "Run a plan") {
+		<div class="crumbs">
+			if d.From != "" {
+				<a href={ templ.SafeURL(plansPath) }>Plans</a> ›
+				<a href={ entryURL(config.KindPlan, d.From) }>{ d.From }</a> ›
+			}
+			Run a plan
+		</div>
+		<div class="page" style="padding-bottom:0">
+			<div class="card">
+				<h3>Plan</h3>
+				<div class="field">
+					<label class="k" for="run-plan">Start from</label>
+					<div>
+						<select id="run-plan" class="input" name="from" hx-get={ runTestsPath } hx-target="#main" hx-select="#main" hx-swap="outerHTML" hx-push-url="true">
+							<option value="" selected?={ d.From == "" }>Blank</option>
+							for _, p := range d.Plans {
+								<option value={ p } selected?={ p == d.From }>{ p }</option>
+							}
+						</select>
+						<div class="hint">A saved plan fills in the rest. Changes below apply to this execution only.</div>
+					</div>
+				</div>
+			</div>
+		</div>
+		<form id="runform" class="runform" hx-post={ apiPreview } hx-trigger="submit, change, input delay:400ms" hx-target="#preview" hx-swap="innerHTML">
+			<input type="hidden" name="plan" value={ d.From }/>
+			<input type="hidden" name="suitesSet" value="1"/>
+			<input type="hidden" name="pauseSet" value="1"/>
+			<input type="hidden" name="diagnosticsSet" value="1"/>
+			<div class="page row" style="padding-bottom:70px">
+				<div class="col">
+					@testbedCard(d)
+					@testsCard(d)
+					@optionsCard(d)
+				</div>
+				<div class="col">
+					<div id="preview" class="card" style="background:var(--inset)">
+						@previewCard(d.Preview, d.Problem, d.Total)
+					</div>
+				</div>
+			</div>
+			<div class="savebar">
+				<span class="mute" style="margin-right:auto;font-size:12px">
+					if d.From != "" {
+						{ "Changes apply to this execution only. Plan " + d.From + " is not changed." }
+					} else {
+						This execution only. Your config files are not changed.
+					}
+				</span>
+				<details class="saveas">
+					<summary class="btn">Save as plan…</summary>
+					<span class="saveas-name">
+						<input class="input mono" name="name" placeholder="plan name" aria-label="Plan name" autocomplete="off"/>
+						<button type="button" class="btn" hx-post={ string(editURL(config.KindPlan, "")) } hx-include="#runform" hx-vals={ vals("then", "run") } hx-swap="none">Save</button>
+					</span>
+				</details>
+				if d.From != "" {
+					<a class="btn" href={ entryURL(config.KindPlan, d.From) }>Cancel</a>
+				} else {
+					<a class="btn" href={ templ.SafeURL(homePath) }>Cancel</a>
+				}
+				@runButton(d.Problem != "", false)
+			</div>
+		</form>
+	}
+}
+
+// planFormPage is a plan's form: its name and description, then the cards of
+// the Run tests form, with the same live preview of what the plan runs.
+templ planFormPage(l layout, p planFormData) {
+	@shell(l, p.title()) {
+		<div class="crumbs">
+			<a href={ templ.SafeURL(plansPath) }>Plans</a> ›
+			{ p.title() }
+		</div>
+		<form id="runform" class="runform" hx-post={ apiPreview } hx-trigger="submit, change, input delay:400ms" hx-target="#preview" hx-swap="innerHTML" data-unsaved>
+			<input type="hidden" name="plan" value=""/>
+			<input type="hidden" name="orig" value={ p.Orig }/>
+			<input type="hidden" name="from" value={ p.editData.From }/>
+			<input type="hidden" name="suitesSet" value="1"/>
+			<input type="hidden" name="pauseSet" value="1"/>
+			<input type="hidden" name="diagnosticsSet" value="1"/>
+			<div class="page" style="padding-bottom:0">
+				<h2 class="title">{ p.title() }</h2>
+				<p class="lead" style="margin-top:6px">{ tabBlurb(config.KindPlan) }</p>
+				if p.Mode == "copy" && p.Origin == config.BuiltIn {
+					<div class="note">{ p.editData.From + " is built in. Your copy is saved under a new name in " }<span class="mono">{ p.UIFile }</span>.</div>
+				}
+			</div>
+			<div class="page row" style="padding-bottom:70px">
+				<div class="col">
+					<div class="card">
+						<div class="field">
+							<label class="k" for="plan-name">Name</label>
+							<input id="plan-name" class="input mono" name="name" value={ p.Name } autocomplete="off" required/>
+						</div>
+						<div class="field">
+							<label class="k" for="plan-description">Description</label>
+							<input id="plan-description" class="input" name="f.description" value={ p.Description } autocomplete="off"/>
+						</div>
+					</div>
+					@testbedCard(p.runTestsData)
+					@testsCard(p.runTestsData)
+					@optionsCard(p.runTestsData)
+				</div>
+				<div class="col">
+					<div id="preview" class="card" style="background:var(--inset)">
+						@previewCard(p.Preview, p.Problem, p.Total)
+					</div>
+				</div>
+			</div>
+			<div class="savebar">
+				<span class="mute" style="font-size:12px;margin-right:auto">Saved to <span class="mono">{ p.UIFile }</span>. Wendy checks it against the schema first.</span>
+				@deleteAction(p.editData)
+				<a class="btn" href={ p.backURL() }>Cancel</a>
+				<button type="button" class="btn primary" hx-post={ string(editURL(config.KindPlan, "")) } hx-include="#runform" hx-swap="none">Save plan</button>
+			</div>
+		</form>
+	}
+}
+
+templ testbedCard(d runTestsData) {
+	<div class="card">
+		<h3>Testbed</h3>
+		<div class="field">
+			<label class="k" for="run-testbed">Testbed</label>
+			<div>
+				<select id="run-testbed" class="input" name="testbed" hx-get={ d.FormURL } hx-include="#runform" hx-target="#runform" hx-select="#runform" hx-swap="outerHTML">
+					if d.Testbed == "" {
+						<option value="" selected>Pick a testbed</option>
+					}
+					for _, t := range d.Testbeds {
+						<option value={ t } selected?={ t == d.Testbed }>{ t }</option>
+					}
+				</select>
+				if d.TestbedDesc != "" {
+					<div class="hint">{ d.TestbedDesc }</div>
+				}
+			</div>
+		</div>
+		<div class="field">
+			<label class="k">Combinations</label>
+			if !d.HasMatrix {
+				<span class="hint">One: this testbed has no matrix.</span>
+			} else {
+				<div>
+					<input type="hidden" name="axesOf" value={ d.Testbed }/>
+					for _, f := range d.Facets {
+						<div class="facet" style="display:flex;margin:2px 0">
+							<span class="mono">{ f.Axis }</span>
+							for _, v := range f.Values {
+								<label><input type="checkbox" name="axis" value={ f.Axis + "=" + v.Value } checked?={ v.On }/><span class="chip mono">{ v.Value }</span></label>
+							}
+						</div>
+					}
+					<div style="margin-top:6px"><input id="run-combinations" class="input mono" name="combinations" value={ d.Combinations } aria-label="Combination names"/></div>
+					<div class="hint">
+						Click a value to leave it out, or type names (* matches anything, e.g. <span class="mono">{ d.NamesExample }</span>).
+					</div>
+				</div>
+			}
+		</div>
+	</div>
+}
+
+templ testsCard(d runTestsData) {
+	<div class="card">
+		<h3>Tests</h3>
+		<div class="field">
+			<label class="k">Suites</label>
+			<div>
+				for _, s := range d.Suites {
+					<div>
+						<label class="check"><input type="checkbox" name="suites" value={ s.Name } checked?={ slices.Contains(d.Picked, s.Name) }/> <b>{ s.Name }</b></label>
+						<span class="hint">{ s.Desc }</span>
+					</div>
+				}
+			</div>
+		</div>
+		<div class="field">
+			<label class="k" for="run-labels">Only tests with labels</label>
+			<div>
+				<input id="run-labels" class="input mono" name="labelFilter" value={ d.LabelFilter }/>
+				<div class="hint" style="max-width:52ch">
+					Empty runs every test. Combine labels with <span class="mono">&amp;&amp;</span> (and), <span class="mono">||</span> (or) and <span class="mono">!</span> (not), e.g. <span class="mono">{ labelExample(d.Labels) }</span>.
+					if len(d.Labels) > 0 {
+						Labels in use: <span class="mono">{ strings.Join(d.Labels, ", ") }</span>.
+					}
+				</div>
+			</div>
+		</div>
+	</div>
+}
+
+templ optionsCard(d runTestsData) {
+	<div class="card">
+		<h3>Options</h3>
+		if d.HasMatrix {
+			<div class="field">
+				<label class="k" for="run-parallel">Combinations at once</label>
+				<div>
+					<input id="run-parallel" class="input" style="min-width:0;width:80px" type="number" min="1" name="parallel" value={ fmt.Sprint(d.Parallel) }/>
+					<div class="hint">Each one needs its own machines.</div>
+				</div>
+			</div>
+		}
+		<div class="field">
+			<label class="k">Keep testbed</label>
+			<div>
+				<span class="seg">
+					for _, k := range keeps {
+						<label><input type="radio" name="keep" value={ k } checked?={ d.Keep == k }/>{ vocab.Choice("keep", k) }</label>
+					}
+				</span>
+				<div class="hint">A kept testbed stays up after the execution so you can look around.</div>
+			</div>
+		</div>
+		<div class="field">
+			<label class="k" for="run-pause">Pause on failure</label>
+			<label class="check"><input id="run-pause" type="checkbox" name="pauseOnFailure" checked?={ d.Pause }/> Wait for me before tearing anything down</label>
+		</div>
+		<div class="field">
+			<label class="k">Collect diagnostics</label>
+			<div>
+				<span class="seg">
+					for _, o := range diagnosticsChoices {
+						<label><input type="radio" name="diagnostics" value={ o } checked?={ d.Diagnostics == o }/>{ vocab.Choice("diagnostics", o) }</label>
+					}
+				</span>
+				<div class="hint">Cluster dumps, Tinkerbell's workflows and logs, and the BMC log, saved before tearing down.</div>
+			</div>
+		</div>
+		<div class="field">
+			<label class="k" for="run-consoles">Machine consoles</label>
+			<label class="check"><input id="run-consoles" type="checkbox" name="consoles" checked?={ d.Consoles }/> Record each machine's console</label>
+		</div>
+	</div>
+}
+
+// runButton starts the execution the form describes. It is disabled while
+// the preview shows a problem; the preview swaps it in out of band so the two
+// always agree.
+templ runButton(problem bool, oob bool) {
+	<button
+		id="run-btn"
+		class="btn primary"
+		type="button"
+		hx-post={ apiExecutions }
+		hx-include="#runform"
+		disabled?={ problem }
+		if problem {
+			title="Fix the problem in the preview first"
+		}
+		if oob {
+			hx-swap-oob="true"
+		}
+	>Run</button>
+}
+
+// previewFragment is what /api/preview answers the form with: the preview,
+// and the Run button to match it.
+templ previewFragment(pv *service.Preview, problem string, total int) {
+	@previewCard(pv, problem, total)
+	@runButton(problem != "" || pv == nil || pv.Preview == nil, true)
+}
+
+templ previewCard(pv *service.Preview, problem string, total int) {
+	<h3>Preview</h3>
+	if problem != "" {
+		<p class="fail" style="white-space:pre-wrap;margin:4px 0">{ capital(problem) }</p>
+	}
+	if pv != nil && pv.Preview != nil {
+		{{ p := pv.Preview }}
+		<p style="margin:0 0 8px">
+			<b>{ previewHeadline(p) }</b>
+			if total > 0 && len(p.Combinations) < total {
+				<span class="mute">{ fmt.Sprintf("· %d of %d", len(p.Combinations), total) }</span>
+			}
+		</p>
+		<table>
+			for i, c := range p.Combinations {
+				<tr>
+					<td class="mono">{ c.Name }</td>
+					<td class="mute">
+						if sameAsFirst(p, i) {
+							same tests
+						} else {
+							for _, s := range c.Suites {
+								<div>{ s.Name + ": " + testChain(s) }</div>
+							}
+						}
+					</td>
+				</tr>
+			}
+		</table>
+		<table class="kv" style="margin-top:10px">
+			<tr><th>Needs</th><td>{ needsLine(p) }</td></tr>
+			<tr>
+				<th>Builds from source</th>
+				<td>
+					if b := buildsLine(p); b != "" {
+						{ b }
+					} else {
+						<span class="mute">Nothing</span>
+					}
+				</td>
+			</tr>
+			<tr><th>Takes about</th><td>{ takesLine(p.Needs) }</td></tr>
+			<tr>
+				<th>Host checks</th>
+				<td>
+					for _, c := range pv.Checks {
+						<span class={ checkClass(c) }>{ checkGlyph(c) + " " + c.Name }</span>&nbsp;
+					}
+				</td>
+			</tr>
+		</table>
+		for _, n := range previewNotes(pv) {
+			<div class="note">{ n }</div>
+		}
+	}
+}
