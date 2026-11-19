@@ -24,17 +24,28 @@ import (
 	bmc: {host: string, user: string, pass: string}
 	sshKey:     string
 	agentImage: string
-	images: {oci2disk: string, writefile: string, kexec: string, waitdaemon: string}
+	images: {oci2disk: string, writefile: string, kexec: string, waitdaemon: string, alpine: string}
 	osRegistry: string
-	// Plain-HTTP registries machines pull from: the local registry and a mirror.
+	// Registries CaptainOS pulls from without verifying TLS, by address: the
+	// local registry and the mirrors.
 	insecureRegistries: [...string]
 	// Set when Tinkerbell is built from source.
 	tinkerbellImage?: string
 	capt: {version: string, repository: string, imageRepository?: string}
-	// containerd hosts.toml bodies, keyed by registry host.
-	registryHosts: [string]: string
+	// The files containerd reads for a registry, keyed by registry host and
+	// then file name.
+	registryFiles: [string]: [string]: string
 	// Host directory mounted into kind nodes at /etc/containerd/certs.d.
 	certsDir?: string
+	// Set when the testbed pulls through the mirrors, which serve TLS for
+	// their container names.
+	mirror?: {
+		// The PEM CA the mirrors' certificates chain to.
+		ca: string
+		// /etc/hosts lines giving each mirror's address on this testbed's
+		// network.
+		hosts: string
+	}
 	dns64IP?:  string
 	nat64Prefix?: string
 	bridge?:   string
@@ -113,6 +124,11 @@ import (
 					if len(rt.insecureRegistries) > 0 {
 						ipxeHttpScriptExtraKernelArgs: ["insecure_registries=" + strings.Join(rt.insecureRegistries, ",")]
 					}
+					if rt.mirror != _|_ {
+						// Serves the Hardware's osieFiles, which carry the
+						// mirrors' names and CA to CaptainOS.
+						bootstrapEnabled: true
+					}
 					if _v6 {
 						dhcpv6Enabled:                  true
 						dhcpv6Mode:                     "derived"
@@ -183,7 +199,16 @@ import (
 				}
 				netboot: {allowPXE: true, allowWorkflow: true}
 			}]
-			metadata: instance: {hostname: m.name, id: m.mac}
+			metadata: {
+				instance: {hostname: m.name, id: m.mac}
+				if rt.mirror != _|_ {
+					// CaptainOS sees these under /osie_files.
+					osieFiles: [
+						{path: "wendy/hosts", contents: rt.mirror.hosts, mode: "0644"},
+						{path: "wendy/mirror-ca.crt", contents: rt.mirror.ca, mode: "0644"},
+					]
+				}
+			}
 		}
 	}]
 
@@ -237,9 +262,9 @@ import (
 		TINKERBELL_IP: rt.vips.tinkerbell
 	}
 
-	// Plain-HTTP registries: the hosts.toml containerd needs to pull from them.
-	_hostsFiles: [for host, body in rt.registryHosts {
-		path:        "/etc/containerd/certs.d/\(host)/hosts.toml"
+	// What containerd needs to pull from the local registry and the mirrors.
+	_hostsFiles: [for host, files in rt.registryFiles for name, body in files {
+		path:        "/etc/containerd/certs.d/\(host)/\(name)"
 		owner:       "root:root"
 		permissions: "0644"
 		content:     body
@@ -255,7 +280,18 @@ import (
 			  config_path = "/etc/containerd/certs.d"
 			"""
 	}}]
-	_mirrorPreCmds: [if len(_hostsFiles) > 0 {"systemctl restart containerd"}]
+	// The mirrors are reached by the names their certificates are for, which
+	// only this testbed's network gives addresses to.
+	_mirrorHostsFile: [if rt.mirror != _|_ {{
+		path:        "/etc/wendy/mirror-hosts"
+		owner:       "root:root"
+		permissions: "0644"
+		content:     rt.mirror.hosts
+	}}]
+	_mirrorPreCmds: list.Concat([
+		[if rt.mirror != _|_ {"cat /etc/wendy/mirror-hosts >> /etc/hosts"}],
+		[if len(_hostsFiles) > 0 {"systemctl restart containerd"}],
+	])
 
 	// kubeadm's preflight needs IPv6 forwarding, which the image does not set.
 	_ipv6Files: [if _v6 {{
@@ -272,7 +308,7 @@ import (
 	// win kubelet's address selection, so the node IP is pinned first.
 	_nodeIPCmds: [if _v6 {#"mkdir -p /etc/default && printf 'KUBELET_EXTRA_ARGS=--node-ip=%s\n' "$(ip -6 -j addr show dev $(ip -6 -j route list default | jq -r .[0].dev) scope global | jq -r '.[0].addr_info[0].local')" > /etc/default/kubelet"#}]
 
-	_files:   list.Concat([_hostsFiles, _configPath, _ipv6Files])
+	_files:   list.Concat([_hostsFiles, _configPath, _mirrorHostsFile, _ipv6Files])
 	_preCmds: list.Concat([_mirrorPreCmds, _ipv6PreCmds])
 
 	_dashed:   strings.Replace(kubernetesVersion, ".", "-", -1)
@@ -460,15 +496,24 @@ import (
 		(#writefile & {_name: "create static netplan", _path: "/etc/netplan/config.yaml", _contents: _netplan, _dirMode: "0755"}).out,
 	] {a}]
 
+	// tink-agent gives a host-network action a copy of CaptainOS's /etc/hosts,
+	// so the mirrors' names must be there before the image is streamed by name.
+	_mirrorHostsAction: [if rt.mirror != _|_ {{
+		name:    "add mirror hosts"
+		image:   rt.images.alpine
+		timeout: 60
+		command: ["sh", "-c", "cat /osie_files/wendy/hosts >> /host/etc/hosts"]
+		volumes: ["/etc/hosts:/host/etc/hosts", "/osie_files/wendy:/osie_files/wendy:ro"]
+	}}]
+
 	_workflow: {
-		version:        "0.1"
 		name:           "wendy"
 		global_timeout: 6000
 		tasks: [{
 			name:   "wendy"
 			worker: "{{.device_1}}"
 			volumes: ["/dev:/dev"]
-			actions: list.Concat([[
+			actions: list.Concat([_mirrorHostsAction, [
 				{
 					name:    "stream image"
 					image:   rt.images.oci2disk
@@ -476,6 +521,10 @@ import (
 					// The only action pulling over the network. tink-agent's
 					// isolated netns is IPv4-only, so it shares the host's.
 					namespaces: network: "host"
+					if rt.mirror != _|_ {
+						// Go trusts every file in /etc/ssl/certs.
+						volumes: ["/osie_files/wendy/mirror-ca.crt:/etc/ssl/certs/wendy-mirror-ca.crt:ro"]
+					}
 					environment: {
 						IMG_URL:    _imgURL
 						DEST_DISK:  "{{ index .Hardware.Disks 0 }}"

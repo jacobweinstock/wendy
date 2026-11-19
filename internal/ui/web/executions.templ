@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/tinkerbell/wendy/internal/engine"
 	"github.com/tinkerbell/wendy/internal/event"
@@ -137,6 +138,7 @@ templ executionBody(d executionData) {
 		}
 	>
 		@executionHeader(d)
+		@settingsSection(d)
 		if d.Failure != nil {
 			@failCard(d)
 		}
@@ -207,6 +209,9 @@ templ executionHeader(d executionData) {
 				<button class="btn" hx-post={ executionAPI(d.Sum.ID, "run-failed-again") }>{ fmt.Sprintf("Run failed again (%d)", d.Failed) }</button>
 			}
 			<button class="btn" hx-post={ executionAPI(d.Sum.ID, "run-again") }>Run again</button>
+			if d.Settings.ChangeURL != "" {
+				<a class="btn" href={ d.Settings.ChangeURL }>Change and run…</a>
+			}
 			if d.Report {
 				<a class="btn" href={ d.file("report.junit.xml") }>JUnit report</a>
 			}
@@ -228,6 +233,91 @@ templ statusChip(s *engine.Summary) {
 	} else {
 		<span class={ "chip", cls(s.Status) }>{ glyph(s.Status) + " " + word(s.Status) }</span>
 	}
+}
+
+// settingsSection is what the execution ran with: its plan, testbed, suites
+// and options, each default marked. It doesn't change while the execution
+// runs, so a live page's refreshes keep it open or closed (hx-preserve).
+templ settingsSection(d executionData) {
+	{{ st := d.Settings }}
+	<details id="settings" class="adv" style="margin:0 0 14px" hx-preserve>
+		<summary>Settings</summary>
+		<table class="kv">
+			<tr>
+				<th>Plan</th>
+				<td>
+					if d.Row.Plan == "" {
+						<span class="mute">Unsaved plan: run from a form</span>
+					} else {
+						if d.Row.PlanURL != "" {
+							<a href={ d.Row.PlanURL }>{ d.Row.Plan }</a>
+						} else {
+							{ d.Row.Plan }
+						}
+						if d.Sum.Edited {
+							<span class="mute">{ " (changed for this execution)" }</span>
+						}
+					}
+				</td>
+			</tr>
+			if !st.Known {
+				<tr><td colspan="2" class="hint">This execution was recorded before Wendy kept an execution's settings. The plan's own are on its page.</td></tr>
+			} else {
+				<tr>
+					<th>Testbed</th>
+					<td>
+						if d.Row.TestbedURL != "" {
+							<a href={ d.Row.TestbedURL }>{ st.Sel.Testbed }</a>
+						} else {
+							{ st.Sel.Testbed }
+						}
+					</td>
+				</tr>
+				<tr>
+					<th>Combinations</th>
+					<td>
+						if len(st.Sel.Combinations) == 0 {
+							<span class="mute">All (default)</span>
+						} else {
+							<span class="mono">{ strings.Join(st.Sel.Combinations, " ") }</span>
+						}
+						<span class="mute">{ " · " + vocab.Count(len(d.Sum.Combinations), "combination", "combinations") + " ran" }</span>
+					</td>
+				</tr>
+				<tr>
+					<th>Suites</th>
+					<td>
+						for i, s := range st.Suites {
+							if i > 0 {
+								{ ", " }
+							}
+							if s.Href != "" {
+								<a href={ s.Href }>{ s.Label }</a>
+							} else {
+								{ s.Label }
+							}
+						}
+						if len(st.Suites) == 0 {
+							<span class="mute">None: the testbed was only set up</span>
+						}
+					</td>
+				</tr>
+				<tr>
+					<th>Only tests with labels</th>
+					<td>
+						if st.Sel.LabelFilter != "" {
+							<span class="mono">{ st.Sel.LabelFilter }</span>
+						} else {
+							<span class="mute">Every test (default)</span>
+						}
+					</td>
+				</tr>
+				for _, r := range st.Rows {
+					@kvRowView(r)
+				}
+			}
+		</table>
+	</details>
 }
 
 templ failCard(d executionData) {
@@ -254,14 +344,22 @@ templ failCard(d executionData) {
 		}
 		if d.Paused {
 			<div class="actions">
-				<button class="btn primary" hx-post={ d.action("retry") }>Retry step</button>
-				<button class="btn" hx-post={ d.action("continue") }>Continue <span class="mute">(record the failure, run the rest)</span></button>
-				<button class="btn danger" hx-post={ d.action("abort") } hx-confirm={ "Abort #" + d.Sum.ID + " and tear down its testbed? This deletes its clusters, VMs and network." }>Abort and tear down</button>
+				@decisionButtons(d.Sum, d.FailedCombination, true)
 			</div>
 		} else if d.Failure.Status == event.Errored {
 			<div class="mute" style="margin-top:8px">Errored means Wendy or the host failed, not Tinkerbell or CAPT. Running it again usually helps.</div>
 		}
 	</div>
+}
+
+// decisionButtons answer a combination paused after a failure: retry the
+// failed step, carry on with the rest, or stop. Stop asks first, saying
+// whether the testbed is then kept. retryFirst makes Retry step the primary
+// button, where nothing else on the card is.
+templ decisionButtons(sum *engine.Summary, combination string, retryFirst bool) {
+	<button class={ "btn", templ.KV("primary", retryFirst) } hx-post={ decisionAPI(sum.ID, combination, "retry") }>Retry step</button>
+	<button class="btn" hx-post={ decisionAPI(sum.ID, combination, "continue") }>Carry on <span class="mute">(record the failure, run the rest)</span></button>
+	<button class="btn danger" hx-post={ decisionAPI(sum.ID, combination, "abort") } hx-confirm={ stopConfirm(sum) }>Stop</button>
 }
 
 // keptTestbedCard is a combination's testbed that is still up: what it is
@@ -274,18 +372,44 @@ templ keptTestbedCard(e service.KeptTestbed) {
 			<span class={ "chip", cls(keptStatus(e)) }>{ glyph(keptStatus(e)) + " " + word(keptStatus(e)) }</span>
 		</div>
 		if rows := keptRows(e); len(rows) > 0 {
-			<table>
+			<table class="kept">
 				for _, row := range rows {
 					<tr>
 						<th>{ row.Label }</th>
 						<td>
-							for _, line := range row.Lines {
-								<div>
-									if line.Text != "" {
-										{ line.Text }
+							if len(row.Facts) > 0 || row.Cluster != nil {
+								<div class="facts">
+									for _, f := range row.Facts {
+										<span>
+											<span class="mute">{ f.Label }</span>
+											if f.Plain {
+												<span>{ f.Value }</span>
+											} else {
+												<span class="mono">{ f.Value }</span>
+											}
+										</span>
 									}
-									<span class="mono">{ line.Code }</span>
+									if c := row.Cluster; c != nil {
+										@copyExport(*c, false)
+										@downloadKubeconfig(*c, false)
+									}
 								</div>
+							}
+							if len(row.Machines) > 0 {
+								<table class="subtable">
+									<tr>
+										<th scope="col">Name</th>
+										<th scope="col">Role</th>
+										<th scope="col">IP address</th>
+									</tr>
+									for _, m := range row.Machines {
+										<tr>
+											<td class="mono">{ m.Name }</td>
+											<td>{ m.Role }</td>
+											<td class="mono">{ m.IP }</td>
+										</tr>
+									}
+								</table>
 							}
 						</td>
 					</tr>
@@ -295,13 +419,31 @@ templ keptTestbedCard(e service.KeptTestbed) {
 			<p class="mute">Nothing is up on it yet.</p>
 		}
 		<div class="actions">
-			<button class="btn" data-copy={ exportLine(e.Dir) } title={ exportLine(e.Dir) }>Copy export KUBECONFIG</button>
-			for _, c := range kubeconfigs(e) {
-				<a class="btn" href={ kubeconfigURL(e, c) } download>{ clusterLabel(c) + " kubeconfig" }</a>
-			}
 			<button class="btn danger" hx-post={ teardownAPI(e.Execution, e.Combination) } hx-confirm={ "Tear down " + address(e) + "? This deletes its clusters, VMs and network." }>Tear down…</button>
 		</div>
 	</div>
+}
+
+// copyExport copies the line that points kubectl at one of a testbed's
+// clusters. named puts the cluster's name on the button, for where nothing
+// beside it says which cluster it is; otherwise only its accessible name
+// says.
+templ copyExport(c clusterAccess, named bool) {
+	if named {
+		<button class="btn sm" data-copy={ c.Export } title={ c.Export }>{ "Copy export KUBECONFIG (" + clusterLabel(c.Cluster) + ")" }</button>
+	} else {
+		<button class="btn sm" data-copy={ c.Export } title={ c.Export } aria-label={ "Copy export KUBECONFIG for the " + clusterLabel(c.Cluster) }>Copy export KUBECONFIG</button>
+	}
+}
+
+// downloadKubeconfig downloads one of a testbed's kubeconfigs; named is as
+// for copyExport.
+templ downloadKubeconfig(c clusterAccess, named bool) {
+	if named {
+		<a class="btn sm" href={ c.Download } download>{ "Download kubeconfig (" + clusterLabel(c.Cluster) + ")" }</a>
+	} else {
+		<a class="btn sm" href={ c.Download } download aria-label={ "Download kubeconfig of the " + clusterLabel(c.Cluster) }>Download kubeconfig</a>
+	}
 }
 
 // keptTestbedLine is a kept testbed folded to one line, for an execution that
@@ -327,17 +469,22 @@ templ executionGrid(d executionData) {
 		</tr>
 		for _, c := range d.Sum.Combinations {
 			<tr class={ templ.KV("sel", c.Name == d.FailedCombination) }>
-				<td><a href={ d.combinationURL(c.Name) }>{ c.Name }</a></td>
+				<td><span class={ cls(ui.CombinationStatus(c)) } title={ word(ui.CombinationStatus(c)) }>{ glyph(ui.CombinationStatus(c)) }</span> <a href={ d.pickURL(c.Name) }>{ c.Name }</a></td>
 				for _, col := range d.Cols {
-					<td class={ "c", cls(d.cell(c, col)) } title={ colName(col) + ": " + word(d.cell(c, col)) }>{ glyph(d.cell(c, col)) }</td>
+					<td class={ "c", cls(d.View.Phase(c, col)) } title={ colName(col) + ": " + word(d.View.Phase(c, col)) }>{ glyph(d.View.Phase(c, col)) }</td>
 				}
 				<td class="mono">
-					if c.Ms > 0 {
-						{ dur(c.Ms) }
+					if ms := d.View.Elapsed(c); ms > 0 {
+						{ dur(ms) }
 					}
 				</td>
-				<td class={ cls(c.Status) }>
-					if c.Failure != nil {
+				<td class={ cls(ui.CombinationStatus(c)) }>
+					if n := d.now(c); n != nil {
+						<a href={ d.nodeURL(n) }>{ pathLabel(n.Path) }</a>
+						if c.Failure != nil {
+							{ ": " + firstLine(c.Failure.Msg) }
+						}
+					} else if c.Failure != nil {
 						{ firstLine(c.Failure.Msg) }
 					}
 				</td>
@@ -353,15 +500,15 @@ templ executionGrid(d executionData) {
 }
 
 templ executionTree(d executionData) {
+	if len(d.Sum.Combinations) > 1 {
+		@combinationPicker(d)
+	}
 	<div class="row">
 		<div class="card tree" style="width:380px;flex:none">
 			for _, r := range d.Rows {
-				<a href={ d.nodeURL(r.Key) } class={ templ.KV("sel", d.Sel != nil && r.Key == d.Sel.Key) } style={ indent(r.Depth) }>
+				<a href={ d.nodeURL(r.Node) } class={ templ.KV("sel", d.Sel != nil && r.Key == d.Sel.Key) } style={ indent(r.Depth) }>
 					<span class={ cls(r.Status) }>{ glyph(r.Status) }</span>
-					<span>{ r.Label() }</span>
-					if r.HasKids && !r.Expanded {
-						<span class="mute">›</span>
-					}
+					<span>{ treeLabel(r.Node) }</span>
 					if r.Status == event.Skipped {
 						<span class="mute">{ "(" + word(r.Status) + ")" }</span>
 					}
@@ -383,6 +530,22 @@ templ executionTree(d executionData) {
 				@nodeDetail(d)
 			}
 		</div>
+	</div>
+}
+
+// combinationPicker picks the combination the tree shows. It is a menu of
+// links, so picking one needs no script.
+templ combinationPicker(d executionData) {
+	<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+		<span class="mute" style="font-size:13px">Combination</span>
+		<details id="combination-picker" class="dropdown">
+			<summary class="btn sm"><span class={ cls(d.shownStatus()) } title={ word(d.shownStatus()) }>{ glyph(d.shownStatus()) }</span> { d.Shown }</summary>
+			<div class="menu">
+				for _, c := range d.Sum.Combinations {
+					<a href={ d.pickURL(c.Name) } class={ templ.KV("on", c.Name == d.Shown) }><span class={ cls(ui.CombinationStatus(c)) } title={ word(ui.CombinationStatus(c)) }>{ glyph(ui.CombinationStatus(c)) }</span> { c.Name }</a>
+				}
+			</div>
+		</details>
 	</div>
 }
 
@@ -431,11 +594,9 @@ templ nodeDetail(d executionData) {
 		for _, c := range d.Consoles {
 			<a class="btn sm" href={ c.Href } target="_blank">{ "Console: " + c.Label }</a>
 		}
-		if d.Kubeconfig != "" {
-			<a class="btn sm" href={ d.Kubeconfig } download>Download kubeconfig</a>
-		}
-		if d.Export != "" {
-			<button class="btn sm" data-copy={ d.Export } title={ d.Export }>Copy export KUBECONFIG</button>
+		for _, c := range d.Clusters {
+			@copyExport(c, true)
+			@downloadKubeconfig(c, true)
 		}
 	</div>
 }

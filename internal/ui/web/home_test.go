@@ -15,9 +15,9 @@ func TestHomeWaitingForYou(t *testing.T) {
 		`<b>Waiting for you:</b> <a href="/executions/5?combination=a-net">#5 nightly</a> paused after a failure. The testbed is kept so you can look around.`,
 		"✗ Failed after 0m04: smoke › nodes",
 		`<a class="btn primary" href="/executions/5?combination=a-net">Open execution</a>`,
-		`hx-post="/api/executions/5/retry?combination=a-net">Retry step</button>`,
-		`hx-post="/api/executions/5/continue?combination=a-net" title="Record the failure and run the rest">Continue</button>`,
-		`hx-post="/api/executions/5/abort?combination=a-net" hx-confirm="Abort #5 and tear down its testbed?`,
+		`<button class="btn" hx-post="/api/executions/5/retry?combination=a-net">Retry step</button>`,
+		`hx-post="/api/executions/5/continue?combination=a-net">Carry on <span class="mute">(record the failure, run the rest)</span></button>`,
+		`hx-post="/api/executions/5/abort?combination=a-net" hx-confirm="Stop #5? Its testbed is kept`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("Home lacks %s", want)
@@ -42,7 +42,8 @@ func TestHomeKeptTestbeds(t *testing.T) {
 		"They use this host's memory and disk until you tear them down.",
 		`<a href="/executions/4?combination=quickstart"><b class="mono">4/quickstart</b></a>`,
 		"quickstart · kept ",
-		">Copy export KUBECONFIG</button>",
+		">Copy export KUBECONFIG (management cluster)</button>",
+		">Copy export KUBECONFIG (workload cluster)</button>",
 		`hx-post="/api/executions/4/quickstart/teardown" hx-confirm="Tear down 4/quickstart?`,
 	} {
 		if !strings.Contains(page, want) {

@@ -97,8 +97,10 @@ type BMC struct {
 type Registry struct {
 	Pull string `json:"pull,omitempty"`
 	Push string `json:"push,omitempty"`
-	// Mirrors maps an upstream registry to its pull-through cache.
+	// Mirrors maps an upstream registry to its pull-through cache's address.
 	Mirrors map[string]string `json:"mirrors,omitempty"`
+	// MirrorCA is the PEM certificate the mirrors' certificates chain to.
+	MirrorCA string `json:"mirrorCA,omitempty"`
 }
 
 type WorkloadClusterState struct {

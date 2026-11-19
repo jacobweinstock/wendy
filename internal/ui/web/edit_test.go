@@ -430,11 +430,24 @@ func TestSelectsShowLabelsAndSubmitValues(t *testing.T) {
 			t.Errorf("the step form lacks %s", want)
 		}
 	}
-	_, page = get(t, s, "/run")
-	for _, want := range []string{`name="keep" value="failed"`, `>If it fails</label>`, `name="diagnostics" value="onFailure"`, `>On failure</label>`} {
+	// The run form's two choices about the testbed say when they apply, with
+	// the default marked, and post their own values.
+	page = shownPage(t, s, "/run")
+	for _, want := range []string{
+		`<span class="k" id="lbl-keep">When it finishes</span>`,
+		`<input type="radio" name="keep" value="never" checked> <span>Tear down the testbed <span class="mute"> (default)</span>`,
+		`<input type="radio" name="keep" value="failed"> <span>Keep the testbed if something fails <span class="hint">So you can look around.`,
+		`<span class="k" id="lbl-pauseOnFailure">When a step fails</span>`,
+		`<input type="radio" name="pauseOnFailure" value="false" checked> <span>Stop <span class="mute"> (default)</span>`,
+		`<input type="radio" name="pauseOnFailure" value="true"> <span>Pause and wait for me <span class="hint">Everything stays up at the failed step.`,
+		`name="diagnostics" value="onFailure"`, `>On failure</label>`,
+	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("the run form lacks %s", want)
 		}
+	}
+	if strings.Contains(page, "Wait for me before tearing") {
+		t.Error("the run form still has the old pause checkbox")
 	}
 }
 
@@ -565,12 +578,17 @@ func TestPartDialog(t *testing.T) {
 	rec := post(t, s, "/edit/workload-cluster", url.Values{"name": {"next"}, "f.kubernetesVersion": {"v1.37.0"}, "then": {"picker"}}, nil)
 	h := rec.Header()
 	if h.Get("HX-Retarget") != "#picker-workloadCluster" || h.Get("HX-Reswap") != "outerHTML" || h.Get("HX-Redirect") != "" ||
-		h.Get("HX-Trigger-After-Settle") != `{"partSaved":{"kind":"workloadCluster"}}` {
+		h.Get("HX-Trigger-After-Settle") != `{"partPicked":{"target":"#p-workloadCluster"}}` {
 		t.Fatalf("headers = %v; body %s", h, rec.Body)
 	}
 	if body := rec.Body.String(); !strings.HasPrefix(body, `<div class="field top" id="picker-workloadCluster">`) ||
 		!strings.Contains(body, `<option value="next" selected>next</option>`) || !strings.Contains(body, "Kubernetes v1.37.0") {
 		t.Errorf("the reply is not the picker with next picked: %s", body)
+	}
+	// A part is shared by the testbeds that pick it, so it is deleted from
+	// its own page, never from a testbed's picker.
+	if body := rec.Body.String(); strings.Contains(body, "/delete") {
+		t.Errorf("the picker offers to delete its part: %s", body)
 	}
 	if svc.Catalog().Parts("workloadCluster")["next"] == nil {
 		t.Error("the part was not saved")
@@ -723,10 +741,12 @@ func TestPlanForms(t *testing.T) {
 		}
 	}
 
+	// The Options card's radios post every choice, defaults included; a
+	// default is not written.
 	form := url.Values{
 		"name": {"weekly"}, "f.description": {"every week"}, "plan": {""},
 		"testbed": {"quickstart"}, "suites": {"smoke"}, "suitesSet": {"1"},
-		"keep": {"failed"}, "pauseSet": {"1"}, "diagnosticsSet": {"1"}, "diagnostics": {"onFailure"}, "consoles": {"on"},
+		"keep": {"failed"}, "pauseSet": {"1"}, "pauseOnFailure": {"false"}, "diagnosticsSet": {"1"}, "diagnostics": {"onFailure"}, "consoles": {"on"},
 	}
 	if rec := post(t, s, "/edit/plans", form, nil); rec.Header().Get("HX-Redirect") != "/plans/weekly" {
 		t.Fatalf("plan not saved: %s", rec.Body)
@@ -741,7 +761,7 @@ func TestPlanForms(t *testing.T) {
 	}
 
 	edit := shownPage(t, s, "/edit/plans/weekly")
-	for _, want := range []string{`<h2 class="title">Edit plan weekly</h2>`, `value="every week"`, ">Delete plan</button>", `<input type="radio" name="keep" value="failed" checked>`} {
+	for _, want := range []string{`<h2 class="title">Edit plan weekly</h2>`, `value="every week"`, ">Delete plan</button>", `<input type="radio" name="keep" value="failed" checked>`, `<input type="radio" name="pauseOnFailure" value="false" checked>`} {
 		if !strings.Contains(edit, want) {
 			t.Errorf("the plan's form lacks %s", want)
 		}

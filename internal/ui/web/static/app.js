@@ -126,7 +126,7 @@
     else if (e.key === "/") { var f = document.getElementById("filter"); if (f) { f.focus(); e.preventDefault(); } }
     else if (e.key === "n") { var rt = document.getElementById("run-tests"); if (rt) location.href = rt.href; }
     else if (e.key === "?") { var h = document.getElementById("help"); if (h) h.hidden = !h.hidden; }
-    else if (e.key === "Escape") { var h2 = document.getElementById("help"); if (h2) h2.hidden = true; close(); }
+    else if (e.key === "Escape") { var h2 = document.getElementById("help"); if (h2) h2.hidden = true; close(); closeDropdowns(); }
     else if (e.key >= "1" && e.key <= "9" && tabs[+e.key - 1]) { location.href = tabs[+e.key - 1].href; }
     else if (e.key === "f") { var fl = document.getElementById("follow"); if (fl) location.href = fl.href; }
   });
@@ -197,7 +197,8 @@
 
   // The testbed form makes a part in a dialog. htmx fills the dialog in, and
   // it opens once filled. It empties when it closes, so it never reopens on a
-  // stale form. A saved part's reply has already put the part in its picker.
+  // stale form. A part saved there comes back as a new picker, which then
+  // gets partPicked.
   document.addEventListener("htmx:afterSwap", function (e) {
     var d = e.detail.target;
     if (d && d.id === "partdialog" && !d.open) d.showModal();
@@ -207,14 +208,43 @@
     var b = e.target.closest("[data-close-dialog]");
     if (b) b.closest("dialog").close();
   });
-  document.addEventListener("partSaved", function (e) {
-    var d = e.target.closest("dialog");
-    if (d) d.close();
+  document.addEventListener("partPicked", function (e) {
+    var d = document.getElementById("partdialog");
+    if (d && d.open) d.close();
     // The testbed form now picks a part it hasn't saved.
     unsaved = true;
-    var sel = document.getElementById("p-" + e.detail.kind);
-    if (sel) sel.focus();
+    e.target.focus();
   });
+
+  // A live page re-renders on every event, log lines included, which would
+  // close a dropdown while it is read. One that was open opens again,
+  // scrolled where it was.
+  var openDropdowns = {};
+  document.addEventListener("htmx:beforeSwap", function () {
+    openDropdowns = {};
+    document.querySelectorAll("details.dropdown[open][id]").forEach(function (d) {
+      var m = d.querySelector(".menu");
+      openDropdowns[d.id] = m ? m.scrollTop : 0;
+    });
+  });
+  document.addEventListener("htmx:afterSwap", function () {
+    Object.keys(openDropdowns).forEach(function (id) {
+      var d = document.getElementById(id);
+      if (!d) return;
+      d.open = true;
+      var m = d.querySelector(".menu");
+      if (m) m.scrollTop = openDropdowns[id];
+    });
+    openDropdowns = {};
+  });
+
+  // A dropdown closes on a click outside it, or on Esc, as menus do.
+  function closeDropdowns(except) {
+    document.querySelectorAll("details.dropdown[open]").forEach(function (d) {
+      if (!except || !d.contains(except)) d.open = false;
+    });
+  }
+  document.addEventListener("click", function (e) { closeDropdowns(e.target); });
 
   // Dark mode: the class on <html> is set before first paint by an inline
   // script in the page head; this only flips and remembers it. Until the user

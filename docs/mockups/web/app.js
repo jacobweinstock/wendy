@@ -431,11 +431,17 @@ function gridView(e, s, url) {
   const keys = s.trees[s.names[0]].filter(r => r.depth === 0).map(r => r.key);
   return `<table class="grid">
     <tr><th>Combination</th>${keys.map(k => `<th style="text-align:center">${esc(PHASE[k] || k)}</th>`).join("")}<th>Time</th><th></th></tr>
-    ${s.names.map(n => { const rows = s.trees[n]; const c = e.combos ? e.combos[n] : e; const f = c.mark && c.mark.st && c.mark.st !== "running" ? D.failures[e.id] : null; return `
-      <tr class="${f ? "sel" : ""}"><td><a href="${url({ view: "tree", c: n })}">${esc(n)}</a></td>
+    ${s.names.map(n => {
+      const rows = s.trees[n]; const c = e.combos ? e.combos[n] : e;
+      const f = c.mark && c.mark.st && c.mark.st !== "running" ? D.failures[e.id] : null;
+      const st = s.comboSt(n), cur = rows.find(r => !r.group && r.st === "running");
+      // The mock has no start times, so a running combination counts from the execution's start.
+      const secs = cur ? e.secs : rows.filter(r => r.depth === 0).reduce((a, r) => a + r.secs, 0);
+      return `
+      <tr class="${f ? "sel" : ""}"><td><span class="${cls(st)}" title="${esc(word(st))}">${glyph(st)}</span> <a href="${url({ view: "tree", c: n })}">${esc(n)}</a></td>
         ${keys.map(k => { const r = rows.find(x => x.depth === 0 && x.key === k); return `<td class="c ${cls(r.st)}" title="${esc((PHASE[k] || k) + ": " + word(r.st))}">${glyph(r.st)}</td>`; }).join("")}
-        <td class="mono">${dur(rows.filter(r => r.depth === 0).reduce((a, r) => a + r.secs, 0))}</td>
-        <td class="${f ? (f.errored ? "err" : "fail") : ""}">${f ? esc(f.title) : ""}</td></tr>`; }).join("")}
+        <td class="mono"${cur ? ` title="so far"` : ""}>${secs ? dur(secs) : ""}</td>
+        <td class="${f ? (f.errored ? "err" : "fail") : ""}">${f ? esc(f.title) : cur ? `<a href="${url({ view: "tree", c: n, node: cur.key })}">${esc(cur.key.split("/").map(k => PHASE[k] || k).join(" › "))}</a>` : ""}</td></tr>`; }).join("")}
   </table>
   <p class="mute" style="font-size:12px;margin-top:10px">${["passed", "failed", "errored", "running", "waiting", "skipped"].map(st => `<span class="${cls(st)}">${glyph(st)} ${word(st)}</span>`).join(" &nbsp; ")}
     &nbsp;·&nbsp; <span class="err">! errored</span> means Wendy or the host failed, not Tinkerbell or CAPT.</p>`;
@@ -445,7 +451,10 @@ function treeView(e, s, sel, node, url, multi) {
   const rows = s.trees[sel];
   const c = e.combos ? e.combos[sel] : e;
   const pick = rows.find(r => r.key === node) || rows.find(r => c.mark && r.key === c.mark.at) || rows.find(r => !r.group && r.st === "running") || rows[rows.length - 1];
-  return `${multi ? `<div style="margin-bottom:10px"><span class="mute" style="font-size:13px">Combination</span> <span class="seg">${s.names.map(n => `<a class="${n === sel ? "on" : ""}" href="${url({ c: n, node: "" })}"><span class="${cls(s.comboSt(n))}">${glyph(s.comboSt(n))}</span> ${esc(n)}</a>`).join("")}</span></div>` : ""}
+  return `${multi ? `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span class="mute" style="font-size:13px">Combination</span>
+    <details id="combination-picker" class="dropdown"><summary class="btn sm"><span class="${cls(s.comboSt(sel))}" title="${word(s.comboSt(sel))}">${glyph(s.comboSt(sel))}</span> ${esc(sel)}</summary>
+      <div class="menu">${s.names.map(n => `<a class="${n === sel ? "on" : ""}" href="${url({ c: n, node: "" })}"><span class="${cls(s.comboSt(n))}" title="${word(s.comboSt(n))}">${glyph(s.comboSt(n))}</span> ${esc(n)}</a>`).join("")}</div>
+    </details></div>` : ""}
   <div class="row">
     <div class="card tree" style="width:400px;flex:none">
       ${rows.map(r => `<a href="${url({ node: r.key })}" class="${r === pick ? "sel" : ""}" style="padding-left:${6 + r.depth * 16}px">
@@ -541,6 +550,7 @@ function mockMenu() {
 
 // Events.
 document.addEventListener("click", ev => {
+  $$("details.dropdown[open]").forEach(d => { if (!d.contains(ev.target)) d.open = false; });
   const pal = ev.target.closest("[data-pal]");
   if (pal) { pickPalette(+pal.dataset.pal); return; }
   if (ev.target.classList.contains("overlay")) { ev.target.hidden = true; return; }
@@ -584,7 +594,7 @@ document.addEventListener("keydown", e => {
     else if (e.key === "Escape") closePalette();
     return;
   }
-  if (e.key === "Escape") { $("#help").hidden = true; $("#mock-menu").hidden = true; if (document.activeElement) document.activeElement.blur(); return; }
+  if (e.key === "Escape") { $("#help").hidden = true; $("#mock-menu").hidden = true; $$("details.dropdown[open]").forEach(d => (d.open = false)); if (document.activeElement) document.activeElement.blur(); return; }
   if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) || e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.key === ":") { openPalette(); e.preventDefault(); }
   else if (e.key.length === 1 && "12345".includes(e.key)) location.hash = ["#/", "#/executions", "#/plans", "#/testbeds", "#/tests"][+e.key - 1];

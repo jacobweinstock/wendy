@@ -31,7 +31,9 @@ type newRun struct {
 	labels       string
 	parallel     string
 	keep         string
-	pause        bool
+	// pause is "true" or "false", the values of vocab's pauseOnFailure
+	// choices, so the form can list them by their labels.
+	pause string
 
 	form *huh.Form
 	gen  int
@@ -44,7 +46,7 @@ type newRun struct {
 // newRun opens the form pre-filled from a selection, or from a plan when base
 // names one ("Edit & run").
 func (m *model) newRun(sel preview.Selection, base string) tea.Cmd {
-	f := &newRun{base: base, keep: "never", parallel: "1"}
+	f := &newRun{base: base, keep: "never", pause: "false", parallel: "1"}
 	if base != "" {
 		if p, ok := m.cat.Plans[base]; ok {
 			pl := p.Value
@@ -68,7 +70,7 @@ func (m *model) newRun(sel preview.Selection, base string) tea.Cmd {
 		f.keep = sel.Keep
 	}
 	if sel.PauseOnFailure != nil {
-		f.pause = *sel.PauseOnFailure
+		f.pause = strconv.FormatBool(*sel.PauseOnFailure)
 	}
 	f.build(m)
 	f.resize(m.w, m.h)
@@ -108,8 +110,10 @@ func (f *newRun) build(m *model) {
 			}
 			return nil
 		}),
-		huh.NewSelect[string]().Title("Keep testbed").Options(choiceOptions("keep")...).Value(&f.keep).Inline(true),
-		huh.NewConfirm().Title("Pause on failure").Description("wait for me before tearing down").Value(&f.pause),
+		huh.NewSelect[string]().Title("When it finishes").Options(choiceOptions("keep")...).Value(&f.keep).
+			DescriptionFunc(func() string { return vocab.ChoiceHelp("keep", f.keep) }, &f.keep),
+		huh.NewSelect[string]().Title("When a step fails").Options(choiceOptions("pauseOnFailure")...).Value(&f.pause).
+			DescriptionFunc(func() string { return vocab.ChoiceHelp("pauseOnFailure", f.pause) }, &f.pause),
 	)).WithShowHelp(false)
 }
 
@@ -179,7 +183,7 @@ func (f *newRun) selection() preview.Selection {
 		sel.Combinations = []string{}
 	}
 	sel.Parallel, _ = strconv.Atoi(f.parallel)
-	pause := f.pause
+	pause := f.pause == "true"
 	sel.PauseOnFailure = &pause
 	return sel
 }

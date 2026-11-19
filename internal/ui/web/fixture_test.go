@@ -120,7 +120,7 @@ func addExecution(t *testing.T, svc *service.Service, id string, sel preview.Sel
 	n, _ := strconv.Atoi(id)
 	started := time.Now().Add(-time.Duration(10-n) * time.Hour)
 	sum := &engine.Summary{
-		ID: id, Label: p.Label, Key: p.Key, Edited: p.Edited, Selection: p.Selection,
+		ID: id, Label: p.Label, Key: p.Key, Edited: p.Edited, Selection: p.Selection, Effective: p.Effective,
 		Status: status, Started: started, PID: os.Getpid(),
 	}
 	stream.Emit(event.Event{Type: event.ExecutionStarted, TS: started})

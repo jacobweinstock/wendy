@@ -437,9 +437,10 @@ func (s *Server) editSave(w http.ResponseWriter, r *http.Request) {
 
 // pickPart answers a part saved in the testbed form's dialog. The kind's
 // picker, with the part picked, replaces the one on the form, which keeps
-// everything else typed in it, and the partSaved event closes the dialog.
+// everything else typed in it. The partPicked event, dispatched on the new
+// picker, closes the dialog.
 func (s *Server) pickPart(w http.ResponseWriter, r *http.Request, kind, name string) {
-	ev, _ := json.Marshal(map[string]any{"partSaved": map[string]string{"kind": kind}})
+	ev, _ := json.Marshal(map[string]any{"partPicked": map[string]string{"target": "#p-" + kind}})
 	w.Header().Set("HX-Retarget", "#picker-"+kind)
 	w.Header().Set("HX-Reswap", "outerHTML")
 	w.Header().Set("HX-Trigger-After-Settle", string(ev))
@@ -536,6 +537,8 @@ func anyList(l []string) []any {
 	return out
 }
 
+// editDelete deletes an entry of the UI file, from its page or its edit form,
+// and shows the kind's list.
 func (s *Server) editDelete(w http.ResponseWriter, r *http.Request) {
 	if !sameOrigin(w, r) {
 		return

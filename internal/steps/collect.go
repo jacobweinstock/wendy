@@ -3,11 +3,13 @@ package steps
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -70,17 +72,25 @@ func collectCluster(ctx context.Context, s *engine.Step, _ struct{}) error {
 			errs = append(errs, err)
 			continue
 		}
+		// A cluster that cannot be listed, like a workload cluster with no API
+		// server yet, gets no link to a dump that holds nothing.
+		wrote := false
+		save := func(file string, v any) {
+			err := writeYAML(filepath.Join(dir, file), v)
+			errs = append(errs, err)
+			wrote = wrote || err == nil
+		}
 		pods := &corev1.PodList{}
 		if err := c.List(ctx, pods); err == nil {
-			errs = append(errs, writeYAML(filepath.Join(dir, "pods.yaml"), pods))
+			save("pods.yaml", pods)
 		}
 		nodes := &corev1.NodeList{}
 		if err := c.List(ctx, nodes); err == nil {
-			errs = append(errs, writeYAML(filepath.Join(dir, "nodes.yaml"), nodes))
+			save("nodes.yaml", nodes)
 		}
 		events := &corev1.EventList{}
 		if err := c.List(ctx, events); err == nil {
-			errs = append(errs, writeYAML(filepath.Join(dir, "events.yaml"), events))
+			save("events.yaml", events)
 		}
 		if cluster == engine.ManagementCluster {
 			withFramework(s, func() {
@@ -95,7 +105,11 @@ func collectCluster(ctx context.Context, s *engine.Step, _ struct{}) error {
 			})
 			errs = append(errs, podLogs(ctx, s, cluster, controllerNamespaces, filepath.Join(dir, "logs")))
 		}
-		diagnostic(s, "dump", dir)
+		if !wrote {
+			s.Log.Info("nothing to dump for " + cluster)
+			continue
+		}
+		diagnostic(s, "dump."+cluster, dir)
 		s.Log.Info("dumped " + cluster)
 	}
 	return errors.Join(errs...)
@@ -172,8 +186,12 @@ func collectTinkerbell(ctx context.Context, s *engine.Step, _ struct{}) error {
 		}
 		errs = append(errs, writeYAML(filepath.Join(dir, k.file), map[string]any{"items": items}))
 	}
-	errs = append(errs, podLogs(ctx, s, engine.TinkerbellCluster, []string{ns}, filepath.Join(dir, "logs")))
+	logsDir := filepath.Join(dir, "logs")
+	errs = append(errs, podLogs(ctx, s, engine.TinkerbellCluster, []string{ns}, logsDir))
 	diagnostic(s, "workflow", filepath.Join(dir, "workflows.yaml"))
+	if entries, err := os.ReadDir(logsDir); err == nil && len(entries) > 0 {
+		diagnostic(s, "logs", logsDir)
+	}
 
 	// The failure card's "Related": a failed workflow action, else a failed
 	// BMC task, whose reason is often the real one.
@@ -181,7 +199,13 @@ func collectTinkerbell(ctx context.Context, s *engine.Step, _ struct{}) error {
 		st := str(wf, "status", "state")
 		if isState(st, "FAILED") || isState(st, "TIMEOUT") {
 			_, failed := workflowProgress(wf)
-			s.Outputs["related"] = fmt.Sprintf("workflow %s failed at %s", wf.GetName(), failed)
+			related := fmt.Sprintf("workflow %s failed at %s", wf.GetName(), failed)
+			// The workflow says only that the action exited; the action's own
+			// error reaches Smee's log over syslog.
+			if why := actionError(logsDir, str(wf, "spec", "hardwareRef")); why != "" {
+				related = fmt.Sprintf("workflow %s failed at action %q: %s", wf.GetName(), failedAction(wf), why)
+			}
+			s.Outputs["related"] = related
 			break
 		}
 	}
@@ -204,6 +228,105 @@ func conditionMessage(o unstructured.Unstructured, t string) string {
 			m, _ := c["message"].(string)
 			return m
 		}
+	}
+	return ""
+}
+
+// failedAction is the name of a workflow's failed or timed out action.
+func failedAction(wf unstructured.Unstructured) string {
+	tasks, _, _ := unstructured.NestedSlice(wf.Object, "status", "tasks")
+	for _, t := range tasks {
+		tm, _ := t.(map[string]any)
+		actions, _ := tm["actions"].([]any)
+		for _, a := range actions {
+			am, _ := a.(map[string]any)
+			st, _ := am["state"].(string)
+			if isState(st, "FAILED") || isState(st, "TIMEOUT") {
+				name, _ := am["name"].(string)
+				return name
+			}
+		}
+	}
+	return str(wf, "status", "currentState", "actionName")
+}
+
+// actionError is the last error an action on host logged, from the Tinkerbell
+// logs in dir: Smee logs what tink-agent sends it over syslog, and an
+// action's own output reaches it as logfmt lines. host empty matches any
+// machine. It returns "" when nothing logged an error.
+func actionError(dir, host string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	last := ""
+	for _, e := range entries {
+		f, err := os.Open(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		sc := bufio.NewScanner(f)
+		sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
+		for sc.Scan() {
+			var line struct {
+				Syslog struct {
+					App      string          `json:"app-name"`
+					Hostname string          `json:"hostname"`
+					Msg      json.RawMessage `json:"msg"`
+				} `json:"syslog"`
+			}
+			if json.Unmarshal(sc.Bytes(), &line) != nil || line.Syslog.App != "tink-agent" || (host != "" && line.Syslog.Hostname != host) {
+				continue
+			}
+			// tink-agent's own records are JSON objects; an action's output is
+			// a string.
+			var out string
+			if json.Unmarshal(line.Syslog.Msg, &out) != nil {
+				continue
+			}
+			switch logfmtValue(out, "level") {
+			case "error", "fatal", "panic":
+				if msg := logfmtValue(out, "msg"); msg != "" {
+					last = msg
+				}
+			}
+		}
+		f.Close()
+	}
+	return last
+}
+
+// logfmtValue is the value of key in a logfmt line, unquoted, or "".
+func logfmtValue(line, key string) string {
+	for from := 0; from < len(line); {
+		i := strings.Index(line[from:], key+"=")
+		if i < 0 {
+			return ""
+		}
+		i += from
+		if i > 0 && line[i-1] != ' ' {
+			from = i + 1
+			continue
+		}
+		v := line[i+len(key)+1:]
+		if !strings.HasPrefix(v, `"`) {
+			if end := strings.IndexAny(v, " \n"); end >= 0 {
+				return v[:end]
+			}
+			return v
+		}
+		for end := 1; end < len(v); end++ {
+			switch v[end] {
+			case '\\':
+				end++
+			case '"':
+				if s, err := strconv.Unquote(v[:end+1]); err == nil {
+					return s
+				}
+				return v[1:end]
+			}
+		}
+		return ""
 	}
 	return ""
 }

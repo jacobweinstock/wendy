@@ -1,12 +1,14 @@
 package tui
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -608,7 +610,9 @@ func (m *model) catalogDetail(name string) string {
 		head(p.Origin)
 		b.WriteString(p.Value.Description + "\n\n")
 		row("Testbed", planLine(p.Value))
-		row("Options", fmt.Sprintf("parallel %d · keep %s · pause %v", p.Value.Parallel, p.Value.Keep, p.Value.PauseOnFailure))
+		row("At once", vocab.Count(max(p.Value.Parallel, 1), "combination", "combinations"))
+		row("When it finishes", vocab.Choice("keep", cmp.Or(p.Value.Keep, "never")))
+		row("When a step fails", vocab.Choice("pauseOnFailure", strconv.FormatBool(p.Value.PauseOnFailure)))
 		if p.Value.LabelFilter != "" {
 			row("Labels", p.Value.LabelFilter)
 		}

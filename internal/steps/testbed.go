@@ -59,9 +59,13 @@ func testbedNetwork(ctx context.Context, s *engine.Step, _ struct{}) error {
 		}
 	}
 	if m := s.Testbed.Config.Network.Mirror; m.Enabled {
+		ca, err := registry.MirrorCA(s.Data)
+		if err != nil {
+			return fmt.Errorf("mirror CA: %w", err)
+		}
 		mirrors := map[string]string{}
 		for _, up := range m.Upstreams {
-			addr, err := registry.EnsureMirror(ctx, up, n.Name, n.Family, logf(s))
+			addr, err := registry.EnsureMirror(ctx, s.Data, up, n.Name, n.Family, logf(s))
 			if err != nil {
 				return fmt.Errorf("mirror for %s: %w", up, err)
 			}
@@ -70,7 +74,7 @@ func testbedNetwork(ctx context.Context, s *engine.Step, _ struct{}) error {
 			}
 			mirrors[up] = addr
 		}
-		if err := s.Testbed.Update(func(st *engine.State) { st.Registry.Mirrors = mirrors }); err != nil {
+		if err := s.Testbed.Update(func(st *engine.State) { st.Registry.Mirrors, st.Registry.MirrorCA = mirrors, ca }); err != nil {
 			return err
 		}
 	}

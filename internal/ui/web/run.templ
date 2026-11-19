@@ -11,73 +11,76 @@ import (
 )
 
 // Run a plan: a saved plan, changed or not, or a blank one, which is not
-// saved unless asked.
+// saved unless asked. Picking another plan under Start from re-renders
+// #runpage, which wraps everything the plan fills in.
 templ runTestsPage(l layout, d runTestsData) {
 	@shell(l, "Run a plan") {
-		<div class="crumbs">
-			if d.From != "" {
-				<a href={ templ.SafeURL(plansPath) }>Plans</a> ›
-				<a href={ entryURL(config.KindPlan, d.From) }>{ d.From }</a> ›
-			}
-			Run a plan
-		</div>
-		<div class="page" style="padding-bottom:0">
-			<div class="card">
-				<h3>Plan</h3>
-				<div class="field">
-					<label class="k" for="run-plan">Start from</label>
-					<div>
-						<select id="run-plan" class="input" name="from" hx-get={ runTestsPath } hx-target="#main" hx-select="#main" hx-swap="outerHTML" hx-push-url="true">
-							<option value="" selected?={ d.From == "" }>Blank</option>
-							for _, p := range d.Plans {
-								<option value={ p } selected?={ p == d.From }>{ p }</option>
-							}
-						</select>
-						<div class="hint">A saved plan fills in the rest. Changes below apply to this execution only.</div>
-					</div>
-				</div>
-			</div>
-		</div>
-		<form id="runform" class="runform" hx-post={ apiPreview } hx-trigger="submit, change, input delay:400ms" hx-target="#preview" hx-swap="innerHTML">
-			<input type="hidden" name="plan" value={ d.From }/>
-			<input type="hidden" name="suitesSet" value="1"/>
-			<input type="hidden" name="pauseSet" value="1"/>
-			<input type="hidden" name="diagnosticsSet" value="1"/>
-			<div class="page row" style="padding-bottom:70px">
-				<div class="col">
-					@testbedCard(d)
-					@testsCard(d)
-					@optionsCard(d)
-				</div>
-				<div class="col">
-					<div id="preview" class="card" style="background:var(--inset)">
-						@previewCard(d.Preview, d.Problem, d.Total)
-					</div>
-				</div>
-			</div>
-			<div class="savebar">
-				<span class="mute" style="margin-right:auto;font-size:12px">
-					if d.From != "" {
-						{ "Changes apply to this execution only. Plan " + d.From + " is not changed." }
-					} else {
-						This execution only. Your config files are not changed.
-					}
-				</span>
-				<details class="saveas">
-					<summary class="btn">Save as plan…</summary>
-					<span class="saveas-name">
-						<input class="input mono" name="name" placeholder="plan name" aria-label="Plan name" autocomplete="off"/>
-						<button type="button" class="btn" hx-post={ string(editURL(config.KindPlan, "")) } hx-include="#runform" hx-vals={ vals("then", "run") } hx-swap="none">Save</button>
-					</span>
-				</details>
+		<div id="runpage">
+			<div class="crumbs">
 				if d.From != "" {
-					<a class="btn" href={ entryURL(config.KindPlan, d.From) }>Cancel</a>
-				} else {
-					<a class="btn" href={ templ.SafeURL(homePath) }>Cancel</a>
+					<a href={ templ.SafeURL(plansPath) }>Plans</a> ›
+					<a href={ entryURL(config.KindPlan, d.From) }>{ d.From }</a> ›
 				}
-				@runButton(d.Problem != "", false)
+				Run a plan
 			</div>
-		</form>
+			<div class="page" style="padding-bottom:0">
+				<div class="card">
+					<h3>Plan</h3>
+					<div class="field">
+						<label class="k" for="run-plan">Start from</label>
+						<div>
+							<select id="run-plan" class="input" name="from" hx-get={ runTestsPath } hx-target="#runpage" hx-select="#runpage" hx-swap="outerHTML" hx-push-url="true">
+								<option value="" selected?={ d.From == "" }>Blank</option>
+								for _, p := range d.Plans {
+									<option value={ p } selected?={ p == d.From }>{ p }</option>
+								}
+							</select>
+							<div class="hint">A saved plan fills in the rest. Changes below apply to this execution only.</div>
+						</div>
+					</div>
+				</div>
+			</div>
+			<form id="runform" class="runform" hx-post={ apiPreview } hx-trigger="submit, change, input delay:400ms" hx-target="#preview" hx-swap="innerHTML">
+				<input type="hidden" name="plan" value={ d.From }/>
+				<input type="hidden" name="suitesSet" value="1"/>
+				<input type="hidden" name="pauseSet" value="1"/>
+				<input type="hidden" name="diagnosticsSet" value="1"/>
+				<div class="page row" style="padding-bottom:70px">
+					<div class="col">
+						@testbedCard(d)
+						@testsCard(d)
+						@optionsCard(d)
+					</div>
+					<div class="col">
+						<div id="preview" class="card" style="background:var(--inset)">
+							@previewCard(d.Preview, d.Problem, d.Total)
+						</div>
+					</div>
+				</div>
+				<div class="savebar">
+					<span class="mute" style="margin-right:auto;font-size:12px">
+						if d.From != "" {
+							{ "Changes apply to this execution only. Plan " + d.From + " is not changed." }
+						} else {
+							This execution only. Your config files are not changed.
+						}
+					</span>
+					<details class="saveas">
+						<summary class="btn">Save as plan…</summary>
+						<span class="saveas-name">
+							<input class="input mono" name="name" placeholder="plan name" aria-label="Plan name" autocomplete="off"/>
+							<button type="button" class="btn" hx-post={ string(editURL(config.KindPlan, "")) } hx-include="#runform" hx-vals={ vals("then", "run") } hx-swap="none">Save</button>
+						</span>
+					</details>
+					if d.From != "" {
+						<a class="btn" href={ entryURL(config.KindPlan, d.From) }>Cancel</a>
+					} else {
+						<a class="btn" href={ templ.SafeURL(homePath) }>Cancel</a>
+					}
+					@runButton(d.Problem != "", false)
+				</div>
+			</form>
+		</div>
 	}
 }
 
@@ -220,21 +223,8 @@ templ optionsCard(d runTestsData) {
 				</div>
 			</div>
 		}
-		<div class="field">
-			<label class="k">Keep testbed</label>
-			<div>
-				<span class="seg">
-					for _, k := range keeps {
-						<label><input type="radio" name="keep" value={ k } checked?={ d.Keep == k }/>{ vocab.Choice("keep", k) }</label>
-					}
-				</span>
-				<div class="hint">A kept testbed stays up after the execution so you can look around.</div>
-			</div>
-		</div>
-		<div class="field">
-			<label class="k" for="run-pause">Pause on failure</label>
-			<label class="check"><input id="run-pause" type="checkbox" name="pauseOnFailure" checked?={ d.Pause }/> Wait for me before tearing anything down</label>
-		</div>
+		@choiceRadios("When it finishes", "keep", "keep", d.Keep, "never")
+		@choiceRadios("When a step fails", "pauseOnFailure", "pauseOnFailure", fmt.Sprint(d.Pause), "false")
 		<div class="field">
 			<label class="k">Collect diagnostics</label>
 			<div>
@@ -249,6 +239,29 @@ templ optionsCard(d runTestsData) {
 		<div class="field">
 			<label class="k" for="run-consoles">Machine consoles</label>
 			<label class="check"><input id="run-consoles" type="checkbox" name="consoles" checked?={ d.Consoles }/> Record each machine's console</label>
+		</div>
+	</div>
+}
+
+// choiceRadios is a run option as radios, each choice with what it does, so
+// people can tell when it applies. Every choice posts its own value: on the
+// run form a blank would mean "the plan's", not the default.
+templ choiceRadios(label, name, path, value, def string) {
+	<div class="field">
+		<span class="k" id={ "lbl-" + name }>{ label }</span>
+		<div role="radiogroup" aria-labelledby={ "lbl-" + name }>
+			for _, v := range vocab.ChoiceValues(path) {
+				<label class="opt">
+					<input type="radio" name={ name } value={ v } checked?={ v == value }/>
+					<span>
+						{ vocab.Choice(path, v) }
+						if v == def {
+							<span class="mute">{ " (default)" }</span>
+						}
+						<span class="hint">{ vocab.ChoiceHelp(path, v) }</span>
+					</span>
+				</label>
+			}
 		</div>
 	</div>
 }

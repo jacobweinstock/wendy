@@ -373,6 +373,97 @@ func (v *ExecutionView) Done() int {
 	return n
 }
 
+// CombinationStatus is a combination's status as the UIs show it: paused
+// while it waits for a decision.
+func CombinationStatus(c engine.CombinationSummary) event.Status {
+	if c.Paused {
+		return event.Paused
+	}
+	return c.Status
+}
+
+// Phase is the status of a combination's build, setup or suite as the grid
+// shows it. It is the verdict once there is one. Before that, a phase that
+// has started is running, between its steps too, unless one of its steps
+// failed, which it then shows.
+func (v *ExecutionView) Phase(c engine.CombinationSummary, name string) event.Status {
+	if st, ok := c.Nodes[name]; ok {
+		return st
+	}
+	if c.Status.Done() {
+		return event.Skipped
+	}
+	if name == engine.PhaseBuild {
+		// The build is shared, and a combination only gets its verdict when it
+		// starts.
+		if n := v.ByKey[key("", []string{name})]; n != nil && n.Status == event.Running {
+			return event.Running
+		}
+		return event.Waiting
+	}
+	n := v.ByKey[key(c.Name, []string{name})]
+	if n == nil || n.Status == event.Waiting {
+		return event.Waiting
+	}
+	if st := worstFailure(n); st != "" {
+		return st
+	}
+	return event.Running
+}
+
+func worstFailure(n *Node) event.Status {
+	var st event.Status
+	for _, c := range n.Children {
+		if c.Status == event.Failed || c.Status == event.Errored || c.Status == event.TimedOut {
+			st = event.Worst(st, c.Status)
+		}
+		st = event.Worst(st, worstFailure(c))
+	}
+	return st
+}
+
+// Now is the step a combination is on: the one it paused at, or the one it
+// is running. It is nil when it is on neither.
+func (v *ExecutionView) Now(c engine.CombinationSummary) *Node {
+	if c.Paused && c.Failure != nil {
+		return v.ByKey[key(c.Name, c.Failure.Path)]
+	}
+	if c.Status.Done() {
+		return nil
+	}
+	return runningStep(v.ByKey[key(c.Name, nil)])
+}
+
+// runningStep is the running step under n. Its parents' statuses can't lead
+// the way: one rated by its finished steps stays so while the next one runs.
+func runningStep(n *Node) *Node {
+	if n == nil {
+		return nil
+	}
+	for _, c := range n.Children {
+		if c.Kind == KindStep && c.Status == event.Running {
+			return c
+		}
+		if s := runningStep(c); s != nil {
+			return s
+		}
+	}
+	return nil
+}
+
+// Elapsed is how long a combination has taken: so far while it runs or is
+// paused, and in all once it is done. A waiting one has taken nothing.
+func (v *ExecutionView) Elapsed(c engine.CombinationSummary) int64 {
+	if c.Status.Done() {
+		return c.Ms
+	}
+	n := v.ByKey[key(c.Name, nil)]
+	if c.Status == event.Waiting || n == nil || n.Started.IsZero() {
+		return 0
+	}
+	return time.Since(n.Started).Milliseconds()
+}
+
 // Row is a visible tree row.
 type Row struct {
 	*Node
@@ -401,6 +492,41 @@ func (v *ExecutionView) Rows(expanded map[string]bool) []Row {
 	}
 	walk(v.Root, 0)
 	return out
+}
+
+// Tree is one combination's tree for drawing, with every row shown: the
+// build, which every combination shares, then the combination's phases,
+// suites, tests and steps.
+func (v *ExecutionView) Tree(combination string) []Row {
+	var out []Row
+	var walk func(ns []*Node, depth int)
+	walk = func(ns []*Node, depth int) {
+		for _, n := range ns {
+			n.Depth = depth
+			out = append(out, Row{Node: n, Expanded: true, HasKids: len(n.Children) > 0})
+			walk(n.Children, depth+1)
+		}
+	}
+	for _, n := range v.Root {
+		switch {
+		case n.Kind == KindBuild:
+			walk([]*Node{n}, 0)
+		case n.Kind == KindCombination && n.Name == combination:
+			walk(n.Children, 0)
+		}
+	}
+	return out
+}
+
+// StopKeeps reports whether stopping one of sum's paused combinations keeps
+// its testbed. Stopping leaves a failure, so When it finishes keeps it when
+// it says to keep the testbed if something fails, or always.
+func StopKeeps(sum *engine.Summary) bool {
+	keep := sum.Effective.Keep
+	if keep == "" {
+		keep = sum.Selection.Keep
+	}
+	return keep == "failed" || keep == "always"
 }
 
 // Dur formats milliseconds the way the mockups do: 0m02, 14m59, 1h52.

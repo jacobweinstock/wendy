@@ -35,9 +35,14 @@ folder, with a delta spec. New work follows this layout, not the skill's default
 | [steps-and-names](specs/ux-redesign/steps-and-names/spec.md) | implemented |
 | [plans-and-matrices](specs/ux-redesign/plans-and-matrices/spec.md) | implemented |
 | [testbed-form](specs/ux-redesign/testbed-form/spec.md) | implemented |
+| [delete-where-created](specs/ux-redesign/delete-where-created/spec.md) | implemented |
+| [execution-settings](specs/ux-redesign/execution-settings/spec.md) | implemented |
+| [grid-progress](specs/ux-redesign/grid-progress/spec.md) | implemented |
+| [combination-tree](specs/ux-redesign/combination-tree/spec.md) | implemented |
 
 steps-and-names and plans-and-matrices come from [feedback-2026-11-18.md](specs/ux-redesign/feedback-2026-11-18.md);
-testbed-form comes from using the new-testbed form.
+testbed-form, delete-where-created, execution-settings, grid-progress and combination-tree come from using the web
+UI.
 
 ### [archive/catalog](specs/archive/catalog/map.md): parts, testbeds and editors
 

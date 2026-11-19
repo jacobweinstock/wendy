@@ -107,12 +107,17 @@ func TestEditorBuildsATestFromSteps(t *testing.T) {
 }
 
 func TestChoicesShowLabelsAndStoreValues(t *testing.T) {
-	var got []string
-	for _, o := range choiceOptions("keep") {
-		got = append(got, o.Key+"="+o.Value)
-	}
-	if want := "Never=never If it fails=failed Always=always"; strings.Join(got, " ") != want {
-		t.Errorf("keep options = %q, want %q", strings.Join(got, " "), want)
+	for path, want := range map[string]string{
+		"keep":           "Tear down the testbed=never Keep the testbed if something fails=failed Always keep the testbed=always",
+		"pauseOnFailure": "Stop=false Pause and wait for me=true",
+	} {
+		var got []string
+		for _, o := range choiceOptions(path) {
+			got = append(got, o.Key+"="+o.Value)
+		}
+		if strings.Join(got, " ") != want {
+			t.Errorf("%s options = %q, want %q", path, strings.Join(got, " "), want)
+		}
 	}
 
 	m := editModel(t)

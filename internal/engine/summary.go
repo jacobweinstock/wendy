@@ -33,6 +33,10 @@ type Summary struct {
 	Builds         []BuildSummary       `json:"builds,omitempty"`
 	Combinations   []CombinationSummary `json:"combinations"`
 	TeardownErrors []string             `json:"teardownErrors,omitempty"`
+	// Effective is what the execution ran: its selection over its plan, with
+	// every default filled in. Executions recorded before it existed leave it
+	// empty.
+	Effective preview.Selection `json:"effective"`
 }
 
 // StepCounts drive the progress bar.
@@ -73,8 +77,9 @@ type Failure struct {
 	Msg     string       `json:"msg"`
 	Ms      int64        `json:"ms"`
 	Related string       `json:"related,omitempty"`
-	// Diagnostics maps a kind (workflow, console, bmc, dump) to a path
-	// relative to the execution directory.
+	// Diagnostics maps a kind (workflow, logs, console, bmc, and
+	// dump.<cluster> per cluster dumped) to a path relative to the execution
+	// directory.
 	Diagnostics map[string]string `json:"diagnostics,omitempty"`
 }
 

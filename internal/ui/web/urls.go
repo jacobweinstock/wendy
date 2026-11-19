@@ -93,8 +93,8 @@ func teardownAPI(execution, combination string) string {
 	return executionAPI(execution, url.PathEscape(combination), "teardown")
 }
 
-// decisionAPI answers a combination paused after a failure: retry, continue
-// or abort.
+// decisionAPI answers a combination paused after a failure with decision:
+// retry, continue or abort, which the UIs call Retry step, Carry on and Stop.
 func decisionAPI(execution, combination, decision string) string {
 	return executionAPI(execution, decision) + "?" + url.Values{"combination": {combination}}.Encode()
 }

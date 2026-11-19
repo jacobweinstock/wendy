@@ -134,6 +134,12 @@ func TestRunTestsSaveAsPlan(t *testing.T) {
 	if p := s.svc.Catalog().Plans["louder"]; p == nil || p.Value.Diagnostics != "always" || p.Value.Consoles {
 		t.Errorf("plan louder = %+v, want loud's diagnostics", p)
 	}
+
+	// The run form runs a plan; a plan is deleted from its own page, so the
+	// form doesn't offer it, even for a plan of yours.
+	if page := shownPage(t, s, "/run/louder"); strings.Contains(page, "/delete") || strings.Contains(page, "Delete plan") {
+		t.Error("the run form offers to delete plan louder")
+	}
 }
 
 // The form picks a testbed and its suites. Only a testbed with a matrix

@@ -109,6 +109,18 @@ templ editAction(d entriesData) {
 	}
 }
 
+// entryActions edit or copy the selected entry, and delete it when the UI
+// file defines it. An entry from one of your own files is deleted there,
+// since the UIs never change those files; a built-in can't be deleted.
+templ entryActions(d entriesData) {
+	@editAction(d)
+	if d.Editable {
+		@deleteButton(d.Tab, d.Sel, d.UsedBy, shortPath(d.Origin))
+	} else if d.Origin != config.BuiltIn {
+		<span class="disabled-why">{ "Defined in " + shortPath(d.Origin) + ", which Wendy doesn't change; delete it there." }</span>
+	}
+}
+
 templ cueSource(src string) {
 	if src != "" {
 		<details style="margin-top:12px">
@@ -207,7 +219,7 @@ templ planDetail(d entriesData) {
 		<div class="actions">
 			<button class="btn primary" hx-post={ apiExecutions } hx-vals={ vals("plan", d.Sel) }>Run</button>
 			<a class="btn" href={ runTestsURL(d.Sel, nil) }>Change and run…</a>
-			@editAction(d)
+			@entryActions(d)
 		</div>
 		<p class="hint" style="margin-top:12px">Change and run changes one execution, not the plan.</p>
 		@cueSource(d.Source)
@@ -287,7 +299,7 @@ templ testbedDetail(d entriesData) {
 		}
 		<div class="actions">
 			<a class="btn primary" href={ runTestsURL("", url.Values{"testbed": {d.Sel}}) }>Run tests on this testbed…</a>
-			@editAction(d)
+			@entryActions(d)
 		</div>
 		@cueSource(d.Source)
 	}
@@ -376,7 +388,7 @@ templ partDetail(d entriesData) {
 			<tr><th>Used by</th><td>@usedByCell(d.UsedBy, "No testbed yet")</td></tr>
 		</table>
 		<div class="actions">
-			@editAction(d)
+			@entryActions(d)
 		</div>
 		@cueSource(d.Source)
 	}
@@ -406,7 +418,7 @@ templ suiteDetail(d entriesData) {
 		</table>
 		<div class="actions">
 			<a class="btn primary" href={ runTestsURL("", url.Values{"suite": {d.Sel}}) }>Run this suite…</a>
-			@editAction(d)
+			@entryActions(d)
 		</div>
 		@cueSource(d.Source)
 	}
@@ -461,7 +473,7 @@ templ testDetail(d entriesData) {
 			<tr><th>Used by</th><td>@usedByCell(d.UsedBy, "No suite yet")</td></tr>
 		</table>
 		<div class="actions">
-			@editAction(d)
+			@entryActions(d)
 		</div>
 		@cueSource(d.Source)
 	}
@@ -515,7 +527,7 @@ templ stepDetail(d entriesData) {
 			The test can set its own name, timeout, retries and labels over the step's.
 		</p>
 		<div class="actions">
-			@editAction(d)
+			@entryActions(d)
 		</div>
 		@cueSource(d.Source)
 	}

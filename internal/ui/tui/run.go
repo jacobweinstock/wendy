@@ -225,8 +225,8 @@ func (rs *runScreen) update(m *model, k tea.KeyPressMsg) tea.Cmd { //nolint:cycl
 		return tea.SetClipboard(kubeconfigExport(dir))
 	case s == "s":
 		return shell(dir)
-	case s == "w" || s == "b" || s == "d":
-		kind := map[string]string{"w": "workflow", "b": "bmc", "d": "dump"}[s]
+	case s == "w" || s == "b" || s == "T":
+		kind := map[string]string{"w": "workflow", "b": "bmc", "T": "logs"}[s]
 		if failure != nil && failure.Diagnostics[kind] != "" {
 			p := filepath.Join(m.svc.ExecutionDir(rs.id), failure.Diagnostics[kind])
 			if st, err := os.Stat(p); err == nil && st.IsDir() {
@@ -235,13 +235,24 @@ func (rs *runScreen) update(m *model, k tea.KeyPressMsg) tea.Cmd { //nolint:cycl
 			return page(p)
 		}
 		m.sayf("no %s in the diagnostics", kind)
+	case s == "d":
+		if failure != nil {
+			if files := dumpFiles(m.svc.ExecutionDir(rs.id), failure.Diagnostics); len(files) > 0 {
+				return pageList(m.svc.ExecutionDir(rs.id), files)
+			}
+		}
+		m.sayf("no cluster dump in the diagnostics")
 	case s == "r" && paused:
 		return decide(m, rs.id, combo, engine.Retry)
 	case s == "c" && paused:
 		return decide(m, rs.id, combo, engine.Continue)
 	case s == "x" && paused:
 		id := rs.id
-		m.confirm = &confirm{prompt: "Abort " + combo + " and tear it down? (y/N)", yes: func() tea.Cmd { return decide(m, id, combo, engine.Abort) }}
+		prompt := "Stop " + combo + " and tear down its testbed? (y/N)"
+		if ui.StopKeeps(rs.summary(m)) {
+			prompt = "Stop " + combo + "? Its testbed is kept so you can look around. (y/N)"
+		}
+		m.confirm = &confirm{prompt: prompt, yes: func() tea.Cmd { return decide(m, id, combo, engine.Abort) }}
 	case s == "x":
 		id := rs.id
 		m.confirm = &confirm{prompt: "Cancel #" + id + "? Its environments are torn down. (y/N)", yes: func() tea.Cmd {
@@ -314,6 +325,26 @@ func pageDir(dir string) tea.Cmd {
 	})
 	sort.Strings(files)
 	return pageList(dir, files)
+}
+
+// dumpFiles are the files of every cluster dump in diagnostics, relative to
+// the execution's directory root.
+func dumpFiles(root string, diagnostics map[string]string) []string {
+	var files []string
+	for kind, rel := range diagnostics {
+		if kind != "dump" && !strings.HasPrefix(kind, "dump.") {
+			continue
+		}
+		_ = filepath.WalkDir(filepath.Join(root, rel), func(p string, d os.DirEntry, err error) error {
+			if err == nil && !d.IsDir() {
+				r, _ := filepath.Rel(root, p)
+				files = append(files, r)
+			}
+			return nil
+		})
+	}
+	sort.Strings(files)
+	return files
 }
 
 func (rs *runScreen) view(m *model) string {
@@ -408,7 +439,7 @@ func (rs *runScreen) view(m *model) string {
 	keys := []string{"↑↓", "select", "→←", "expand/collapse", "f", "follow", "l", "log", "a", "artifacts", "o", "console"}
 	switch {
 	case paused:
-		keys = []string{"s", "shell", "r", "retry step", "c", "continue", "x", "abort", "w/o/b/d", "diagnostics", "↑↓", "select"}
+		keys = []string{"s", "shell", "r", "retry step", "c", "carry on", "x", "stop", "w/T/o/b/d", "diagnostics", "↑↓", "select"}
 	case !status.Done():
 		keys = append(keys, "x", "cancel run")
 	default:
@@ -428,9 +459,15 @@ func (rs *runScreen) failureCard(m *model, combo string, f *engine.Failure, paus
 		b.WriteString(sBold.Render("Related:") + "  " + f.Related + "\n")
 	}
 	var diag []string
-	for _, k := range []struct{ key, kind, label string }{{"w", "workflow", "workflow"}, {"o", "console", "console"}, {"b", "bmc", "BMC log"}, {"d", "dump", "cluster dump"}} {
+	for _, k := range []struct{ key, kind, label string }{{"w", "workflow", "workflow"}, {"T", "logs", "Tinkerbell logs"}, {"o", "console", "console"}, {"b", "bmc", "BMC log"}} {
 		if f.Diagnostics[k.kind] != "" {
 			diag = append(diag, sKey.Render("["+k.key+"]")+" "+k.label)
+		}
+	}
+	for kind := range f.Diagnostics {
+		if kind == "dump" || strings.HasPrefix(kind, "dump.") {
+			diag = append(diag, sKey.Render("[d]")+" cluster dumps")
+			break
 		}
 	}
 	if len(diag) > 0 {
@@ -441,7 +478,7 @@ func (rs *runScreen) failureCard(m *model, combo string, f *engine.Failure, paus
 		b.WriteString("\nThe environment is kept so you can look around.\n")
 		b.WriteString("kubeconfigs  " + sMute.Render(filepath.Join(dir, "kubeconfigs")) + "\n\n")
 		b.WriteString(sKey.Render("[ s  Open shell here ]") + "   " + sKey.Render("[ r  Retry step ]") + "   " +
-			sKey.Render("[ c  Continue ]") + "   " + sKey.Render("[ x  Abort and tear down ]"))
+			sKey.Render("[ c  Carry on ]") + "   " + sKey.Render("[ x  Stop ]"))
 	}
 	st := sFail.Width(m.w - 4)
 	if f.Status == event.Errored {

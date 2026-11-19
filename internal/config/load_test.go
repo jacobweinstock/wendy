@@ -252,14 +252,8 @@ func TestLoadKeepsLastGood(t *testing.T) {
 	}
 }
 
-func TestRender(t *testing.T) {
-	cat := (&Loader{Builtins: testBuiltins()}).Load()
-	tb := resolved(t, cat, "quickstart")
-	r, err := NewRenderer(testBuiltins())
-	if err != nil {
-		t.Fatal(err)
-	}
-	rt := map[string]any{
+func testRuntime() map[string]any {
+	return map[string]any{
 		"vips":           map[string]any{"tinkerbell": "172.20.255.254", "hookos": "172.20.255.253", "controlPlane": "172.20.255.252"},
 		"prefixLen":      16,
 		"netmask":        "255.255.0.0",
@@ -273,12 +267,22 @@ func TestRender(t *testing.T) {
 		"bmc":                map[string]any{"host": "172.20.0.2", "user": "root", "pass": "calvin"},
 		"sshKey":             "ssh-ed25519 AAAA test",
 		"agentImage":         "ghcr.io/tinkerbell/tink-agent",
-		"images":             map[string]any{"oci2disk": "o", "writefile": "w", "kexec": "k", "waitdaemon": "wd"},
+		"images":             map[string]any{"oci2disk": "o", "writefile": "w", "kexec": "k", "waitdaemon": "wd", "alpine": "a"},
 		"osRegistry":         "ghcr.io/tinkerbell/cluster-api-provider-tinkerbell/ubuntu",
 		"insecureRegistries": []string{},
 		"capt":               map[string]any{"version": "v0.7.0", "repository": "https://example/releases"},
-		"registryHosts":      map[string]string{},
+		"registryFiles":      map[string]map[string]string{},
 	}
+}
+
+func TestRender(t *testing.T) {
+	cat := (&Loader{Builtins: testBuiltins()}).Load()
+	tb := resolved(t, cat, "quickstart")
+	r, err := NewRenderer(testBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := testRuntime()
 
 	var objs []map[string]any
 	if err := r.Render(tb, rt, "workloadCluster", &objs, nil); err != nil {
@@ -337,6 +341,73 @@ func TestRender(t *testing.T) {
 	opts := objs[5]["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["bootOptions"].(map[string]any)
 	if opts["isoURL"] != "http://[fd00:cafe::fffe]:7080/iso6/hook.iso" {
 		t.Errorf("bootOptions = %v", opts)
+	}
+}
+
+// The mirrors serve TLS by name: CaptainOS gets the names and the CA as OSIE
+// files, adds the names to /etc/hosts before the image is streamed by name,
+// and oci2disk trusts the CA; workload nodes get both for containerd.
+func TestRenderMirror(t *testing.T) {
+	cat := (&Loader{Builtins: testBuiltins()}).Load()
+	tb := resolved(t, cat, "quickstart")
+	r, err := NewRenderer(testBuiltins())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := testRuntime()
+	rt["osRegistry"] = "wendy-mirror-ghcr-io:5000/tinkerbell/cluster-api-provider-tinkerbell/ubuntu"
+	rt["registryFiles"] = map[string]map[string]string{"ghcr.io": {"hosts.toml": "h", "ca.crt": "CA"}}
+	rt["mirror"] = map[string]any{"ca": "CA", "hosts": "172.20.0.2 wendy-mirror-ghcr-io\n"}
+
+	var values map[string]any
+	if err := r.Render(tb, rt, "tinkerbellValues", &values, nil); err != nil {
+		t.Fatal(err)
+	}
+	if smee := values["deployment"].(map[string]any)["envs"].(map[string]any)["smee"].(map[string]any); smee["bootstrapEnabled"] != true {
+		t.Errorf("smee = %v, want bootstrapEnabled so osieFiles are served", smee)
+	}
+
+	var hw []map[string]any
+	if err := r.Render(tb, rt, "hardware", &hw, nil); err != nil {
+		t.Fatal(err)
+	}
+	files, _ := hw[0]["spec"].(map[string]any)["metadata"].(map[string]any)["osieFiles"].([]any)
+	got := map[string]any{}
+	for _, f := range files {
+		m := f.(map[string]any)
+		got[m["path"].(string)] = m["contents"]
+	}
+	if got["wendy/hosts"] != "172.20.0.2 wendy-mirror-ghcr-io\n" || got["wendy/mirror-ca.crt"] != "CA" {
+		t.Errorf("osieFiles = %v", files)
+	}
+
+	var objs []map[string]any
+	if err := r.Render(tb, rt, "workloadCluster", &objs, nil); err != nil {
+		t.Fatal(err)
+	}
+	wf := objs[5]["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["templateOverride"].(string)
+	hosts, stream := strings.Index(wf, "name: add mirror hosts"), strings.Index(wf, "name: stream image")
+	if hosts < 0 || stream < hosts || !strings.Contains(wf, "/osie_files/wendy/mirror-ca.crt:/etc/ssl/certs/wendy-mirror-ca.crt:ro") ||
+		!strings.Contains(wf, "IMG_URL: wendy-mirror-ghcr-io:5000/") {
+		t.Errorf("workflow:\n%s", wf)
+	}
+	spec := objs[2]["spec"].(map[string]any)["kubeadmConfigSpec"].(map[string]any)
+	paths := map[string]bool{}
+	for _, f := range spec["files"].([]any) {
+		paths[f.(map[string]any)["path"].(string)] = true
+	}
+	cmds := spec["preKubeadmCommands"].([]any)
+	if !paths["/etc/containerd/certs.d/ghcr.io/ca.crt"] || !paths["/etc/wendy/mirror-hosts"] ||
+		cmds[0] != "cat /etc/wendy/mirror-hosts >> /etc/hosts" || cmds[1] != "systemctl restart containerd" {
+		t.Errorf("control plane files = %v, preKubeadmCommands = %v", paths, cmds)
+	}
+
+	delete(rt, "mirror")
+	if err := r.Render(tb, rt, "workloadCluster", &objs, nil); err != nil {
+		t.Fatal(err)
+	}
+	if wf := objs[5]["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["templateOverride"].(string); strings.Contains(wf, "add mirror hosts") || strings.Contains(wf, "mirror-ca.crt") {
+		t.Errorf("without the mirrors the workflow still adds their names or CA:\n%s", wf)
 	}
 }
 

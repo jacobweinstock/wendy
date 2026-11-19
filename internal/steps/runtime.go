@@ -8,6 +8,8 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"maps"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -33,6 +35,7 @@ const (
 	imageWritefile  = "quay.io/tinkerbell/actions/writefile"
 	imageKexec      = "quay.io/tinkerbell/actions/kexec"
 	imageWaitdaemon = "ghcr.io/jacobweinstock/waitdaemon:latest"
+	imageAlpine     = "docker.io/library/alpine:3.24"
 )
 
 func metaName(n string) metav1.ObjectMeta { return metav1.ObjectMeta{Name: n} }
@@ -69,8 +72,15 @@ func runtimeOf(ctx context.Context, s *engine.Step) (map[string]any, error) {
 		return nil, err
 	}
 
-	hosts := map[string]string{}
+	files := map[string]map[string]string{}
+	// CaptainOS's containerd pulls before anything can tell it the mirrors'
+	// names, so the images it pulls go to their addresses. oci2disk is given
+	// the names, and the CA, by the workflow.
 	rewrite := func(ref string) string { return mirrored(ref, st.Registry.Mirrors) }
+	named := map[string]string{}
+	for up := range st.Registry.Mirrors {
+		named[up] = registry.MirrorHost(up)
+	}
 	rt := map[string]any{
 		"vips":           map[string]any{"tinkerbell": st.VIPs.Tinkerbell, "hookos": st.VIPs.HookOS, "controlPlane": st.VIPs.ControlPlane},
 		"prefixLen":      plen,
@@ -85,9 +95,10 @@ func runtimeOf(ctx context.Context, s *engine.Step) (map[string]any, error) {
 		"images": map[string]any{
 			"oci2disk": rewrite(imageOCI2Disk), "writefile": rewrite(imageWritefile),
 			"kexec": rewrite(imageKexec), "waitdaemon": rewrite(imageWaitdaemon),
+			"alpine": rewrite(imageAlpine),
 		},
-		"osRegistry":    rewrite(osRegistry),
-		"registryHosts": hosts,
+		"osRegistry":    mirrored(osRegistry, named),
+		"registryFiles": files,
 		"bridge":        st.Network.Bridge,
 		"nat64Prefix":   network.NAT64Prefix,
 	}
@@ -106,17 +117,29 @@ func runtimeOf(ctx context.Context, s *engine.Step) (map[string]any, error) {
 	}
 
 	insecure := []string{}
-	for up, addr := range st.Registry.Mirrors {
-		hosts[up] = mirrorHostsTOML(up, addr)
+	var hostLines []string
+	for _, up := range slices.Sorted(maps.Keys(st.Registry.Mirrors)) {
+		addr := st.Registry.Mirrors[up]
+		files[up] = map[string]string{"hosts.toml": mirrorHostsTOML(up), "ca.crt": st.Registry.MirrorCA}
+		// CaptainOS writes these as http:// with skip_verify, which
+		// containerd tries as HTTPS first.
 		insecure = append(insecure, addr)
+		ip, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, fmt.Errorf("mirror address %q: %w", addr, err)
+		}
+		hostLines = append(hostLines, ip+" "+registry.MirrorName(up))
+	}
+	if len(hostLines) > 0 {
+		rt["mirror"] = map[string]any{"ca": st.Registry.MirrorCA, "hosts": strings.Join(hostLines, "\n") + "\n"}
 	}
 	if st.Registry.Pull != "" {
-		hosts[st.Registry.Pull] = registry.HostsTOML(st.Registry.Pull)
+		files[st.Registry.Pull] = map[string]string{"hosts.toml": registry.HostsTOML(st.Registry.Pull)}
 		insecure = append(insecure, st.Registry.Pull)
 	}
 	slices.Sort(insecure)
 	rt["insecureRegistries"] = insecure
-	if len(hosts) > 0 {
+	if len(files) > 0 {
 		rt["certsDir"] = filepath.Join(tb.Dir, "certs.d")
 	}
 
@@ -184,8 +207,9 @@ func pullRef(ref, pull string) string {
 	return strings.Replace(ref, registry.PushEndpoint, pull, 1)
 }
 
-// mirrored points an image at its upstream's pull-through cache. Only
-// images pulled by something without containerd's certs.d need this.
+// mirrored points an image at its upstream's pull-through cache, at the
+// host:port mirrors gives for it. Only images pulled by something without
+// containerd's certs.d need this.
 func mirrored(ref string, mirrors map[string]string) string {
 	for up, addr := range mirrors {
 		if strings.HasPrefix(ref, up+"/") {
@@ -196,30 +220,35 @@ func mirrored(ref string, mirrors map[string]string) string {
 }
 
 // mirrorHostsTOML points containerd at a pull-through cache for an upstream,
-// falling back to the upstream itself.
-func mirrorHostsTOML(upstream, addr string) string {
+// by the name its certificate is for and trusting the mirror CA written next
+// to it, falling back to the upstream itself.
+func mirrorHostsTOML(upstream string) string {
 	server := "https://" + upstream
 	if upstream == "docker.io" {
 		// docker.io itself answers the v2 API with a redirect to a web page.
 		server = "https://registry-1.docker.io"
 	}
-	return fmt.Sprintf("server = %q\n\n[host.\"http://%s\"]\n  capabilities = [\"pull\", \"resolve\"]\n", server, addr)
+	ca := "/etc/containerd/certs.d/" + upstream + "/ca.crt"
+	return fmt.Sprintf("server = %q\n\n[host.\"https://%s\"]\n  capabilities = [\"pull\", \"resolve\"]\n  ca = %q\n", server, registry.MirrorHost(upstream), ca)
 }
 
-// writeCertsDir writes the hosts.toml files kind nodes mount.
+// writeCertsDir writes the certs.d files kind nodes mount.
 func writeCertsDir(rt map[string]any) error {
 	dir, ok := rt["certsDir"].(string)
 	if !ok {
 		return nil
 	}
-	hosts, _ := rt["registryHosts"].(map[string]string)
-	for host, body := range hosts {
-		d := filepath.Join(dir, strings.NewReplacer("[", "", "]", "").Replace(host))
+	files, _ := rt["registryFiles"].(map[string]map[string]string)
+	for host, byName := range files {
+		// containerd looks an IPv6 registry up as [addr]:port, brackets kept.
+		d := filepath.Join(dir, host)
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(d, "hosts.toml"), []byte(body), 0o644); err != nil {
-			return err
+		for name, body := range byName {
+			if err := os.WriteFile(filepath.Join(d, name), []byte(body), 0o644); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

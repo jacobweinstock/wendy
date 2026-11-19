@@ -224,15 +224,30 @@ and deletes:
 - **Steps** of your own, with the same fields as one step of a test.
 - **Suites** list tests in the order they run.
 
-A part, testbed or step that something uses cannot be deleted or renamed; the error lists what uses
-it. Leaving a form with unsaved changes asks first.
+Wherever the web UI makes an entry, it can delete one you made, after asking: on the entry's page, beside **Edit**,
+and in its edit form. Forms that only pick an entry, such as a testbed's part pickers and **Run a plan…**, don't
+delete it; **Open ↗** opens a part's page in a new tab.
+
+A part, testbed, suite, test or step that something uses can't be deleted or renamed; the button is disabled and
+says what uses it. An entry from one of your own files is deleted in that file, and a built-in can't be deleted.
+Leaving a form with unsaved changes asks first.
 
 The TUI edits tests and suites (`a` add, `e` edit, `c` copy, `D` delete). Its testbed and part
 editors are still to come.
 
 **Run a plan…** starts an execution from a saved plan or a blank one, with a live preview of what it
 will do. Changes are for that execution only; **Save as plan…** keeps them as a new plan. An
-execution from a blank form shows "Unsaved plan".
+execution from a blank form shows "Unsaved plan". Every execution's page has **Settings**, which lists
+exactly what it ran with, and **Change and run…**, which opens Run a plan… filled in with them.
+
+Two options say what happens to the testbed, each choice with what it does:
+
+- **When it finishes** (`keep`): tear down the testbed (the default), keep it if something fails, or always keep
+  it.
+- **When a step fails** (`pauseOnFailure`): stop (the default), or pause and wait for you with everything up. A
+  paused combination offers **Retry step**, **Carry on** (record the failure, run the rest) and **Stop**, which
+  then keeps or tears down the testbed as When it finishes says. Pausing only applies when a step fails: an
+  execution that passes is kept or torn down as When it finishes says.
 
 The UIs write what they create to `./.wendy/wendy-ui.cue` and never touch your own files. Built-ins
 and entries from your files can be copied into it to change them, under a new name, since a built-in's
@@ -266,8 +281,10 @@ executions/412/
 
 A testbed kept after an execution (`--keep failed` or `always`) is addressed as
 `<execution>/<combination>`, e.g. `412/1.37-ha`, and managed with `wendy env status`,
-`wendy env kubeconfig` and `wendy env down`. In the web UI, a kept testbed's kubeconfigs and Tear down
-are on its execution's page and in Home's Kept testbeds.
+`wendy env kubeconfig` and `wendy env down`. In the web UI, a kept testbed's card on its execution's
+page lists each part with its values labelled. Each cluster's row has **Copy export KUBECONFIG** and
+**Download kubeconfig** for that cluster. Home's Kept testbeds has a copy button per cluster, and
+Tear down.
 
 To reach the web UI from another machine, set `--addr` and protect it with `WENDY_TOKEN`; open it
 once as `http://<host>:7600/?token=<token>`.

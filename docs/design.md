@@ -103,7 +103,7 @@ Every feature is mapped to the cheapest mechanism that delivers it. This table i
 | libvirt VMs | `go-libvirt` + `libvirtxml` | domain builder |
 | BMC | the virtualbmc image (sushy-tools) | container lifecycle; port/credential wiring |
 | Local registry (source-built images, agent pulled by machines) | a `registry:2` container, as the earlier scripts' `registry_ensure.sh` does | container lifecycle |
-| Registry mirror | a pull-through registry container (one per upstream with `registry:2`, or a single zot; decided in M3) | wiring |
+| Registry mirror | a pull-through `registry:2` container per upstream, shared by every combination, serving TLS for its container name with a certificate from a host-wide wendy CA. Kind nodes resolve the names through Docker's DNS; workload nodes get them in `/etc/hosts` from cloud-init; CaptainOS gets them and the CA as Hardware `osieFiles`, and a first workflow action adds the names to its `/etc/hosts` so oci2disk can stream the OS image by name. CaptainOS's own containerd pulls by address with `insecure_registries`, as it does before any action runs | wiring |
 | Live config reload in the UIs | `fsnotify` + re-running the loader | ~40 LoC |
 | Storage | the filesystem: `events.jsonl` + `execution.json` | none (no DB, no migrations) |
 | Reports | JUnit only, rendered from events | ~100 LoC |
@@ -480,10 +480,11 @@ This keeps the earlier scripts' rule, generalised:
   - BMC logs
   - consoles (streamed all the time, not only on failure)
 - **Debug** (all available as TUI/UI toggles and actions, and as CLI flags):
-  - `keep: failed|always` keeps the testbed after the execution.
-  - Pause on failure: the execution waits, showing kubeconfig paths and console/BMC info, until the user picks **Continue**, **Abort** or **Open shell**. *Open shell* is TUI only: it starts `$SHELL` with `KUBECONFIG` set.
+  - **When it finishes** (`keep: never|failed|always`): tear down the testbed, keep it if something fails, or always keep it.
+  - **When a step fails** (`pauseOnFailure`): stop, or pause and wait with everything up, showing kubeconfig paths and console/BMC info, until the user picks **Retry step**, **Carry on**, **Stop** or **Open shell**. Stop leaves a failure, so the testbed is then kept or torn down as `keep` says. *Open shell* is TUI only: it starts `$SHELL` with `KUBECONFIG` set.
   - `wendy env up|down` and `wendy step run <step> --env <execution>/<combination>` give an inner dev loop.
-- **Parallel combinations** are limited by `parallel` and by host allocations recorded in `host.json`.
+- **Parallel combinations** are limited by `parallel` and by host allocations recorded in `host.json`. They start
+  in the order the preview lists them, each as soon as a slot is free.
 - **Waits** use Gomega `Eventually` with generous timeouts and short intervals.
 
 ### Step API (Go, built-ins only)
@@ -628,6 +629,10 @@ POST   /api/reload                     POST /api/starter
 GET    /executions/{id}/files/…        http.FileServer over the execution's directory
 ```
 
+`continue`, `abort` and `retry` answer a paused combination; the UIs call them Carry on, Stop and Retry step.
+`GET /api/executions/{id}` includes `effective`: what the execution ran with, its selection over its plan with
+every default filled in, which the execution page's Settings shows.
+
 ### 11.1 TUI/UI-first workflow
 
 The intended daily flow uses no flags:
@@ -635,28 +640,28 @@ The intended daily flow uses no flags:
 1. Write CUE files in `./.wendy/` (or `$XDG_CONFIG_HOME/wendy/`).
 2. Run `wendy`. The TUI opens and the web UI is served on `127.0.0.1:7600`.
 3. Pick a **plan**, or build a selection: a testbed, some of its combinations, suites, a label filter, parallel, keep. Press **Run**.
-4. Watch the execution live. On failure, inspect its artifacts and diagnostics, open a shell against the kept testbed, then continue, abort or tear down.
+4. Watch the execution live. On failure, inspect its artifacts and diagnostics, open a shell against the kept testbed, then retry the step, carry on, stop or tear down.
 5. Edit a CUE file. The config reloads; run the same selection again.
 
 Both UIs are views over the same Service. The web UI's screens are below; the TUI keeps today's (Plans, Catalog, Runs, Run, Environments, Config) until the `tui-ux` module redesigns them. The web UI's top bar is Home · Executions · Plans · Testbeds · Suites, keys `1`–`5`, then **Run a plan…** (`n`). No config entry is deeper than tab → subtab → item.
 
 | Screen | Contents | Actions |
 |---|---|---|
-| **Home** `/` | Waiting for you (a paused execution), Running, Plans one line each, Recent executions, Kept testbeds; on first launch, the host checks and the starter | run a plan; Retry step, Continue, Abort and tear down; tear down |
+| **Home** `/` | Waiting for you (a paused execution), Running, Plans one line each, Recent executions, Kept testbeds; on first launch, the host checks and the starter | run a plan; Retry step, Carry on, Stop; tear down |
 | **Executions** `/executions` | every execution, `#n`, with its plan, result, testbed, start and time taken; filters All · Running · Waiting for you · Passed · Failed · Errored · Kept testbeds | open, run again, cancel, delete |
-| **Execution** `/executions/{id}` | Build node + combination → suite → test → step tree, or a combinations × columns grid; live log of the selected node; failure card; artifacts; the kept testbed with its kubeconfigs | cancel; Retry step, Continue, Abort (paused); Copy export KUBECONFIG, Download kubeconfig; tear down |
+| **Execution** `/executions/{id}` | A tree of one combination, picked from a **Combination** dropdown that lists each with its status: the build, then the combination's phases, suites, tests and steps, every row shown, and Follow staying in it; or a combinations × columns grid: each combination's status (its name opens its tree), each phase and suite running or its verdict, and for a running or paused combination the step it is on (a link into the tree) and its time so far; live log of the selected node; failure card; artifacts; the kept testbed card, one row per part with each value labelled (Tinkerbell version and address, Cluster API and CAPT versions, each cluster, the machines' names, roles and IP addresses, BMC, network); **Settings**, what it ran with (plan, testbed, combinations, suites, labels and options, defaults marked) | cancel; run again; **Change and run…** (the run form filled in with its settings); Retry step, Carry on, Stop (paused); per cluster (management, Tinkerbell's own, workload) **Copy export KUBECONFIG** and **Download kubeconfig**, on that cluster's row of the kept testbed card, or named in the node pane while it runs; tear down |
 | **Plans** `/plans/{name}` | each plan's testbed, suites, label filter, options and last execution | Run, Change and run…; New, Edit, Copy and edit…, Delete; View CUE |
 | **Testbeds** `/testbeds/{subtab}/{name}` | subtabs Testbeds (settings, parts, matrix, resolved values) · Tinkerbell · Cluster API · Management cluster · Workload cluster · Hardware; each entry's Used by | Run tests on this testbed…; New, Edit, Copy and edit…, Delete; Edit matrix; View CUE |
 | **Suites** `/suites/{subtab}/{name}` | subtabs Suites · Tests · Steps (built-in ones with their parameters schema, and yours); each entry's Used by | Run this suite…; New, Edit, Copy and edit…, Delete; View CUE |
 | **Run a plan** `/run`, `/run/{plan}` | a Plan card (a saved plan, or Blank), then Testbed, Tests and Options cards with a live preview | Run (changes are for one execution only); Save as plan… |
 | **Config files** `/config`, from the ⚠ indicator or the palette | watched directories, last reload, every file ✓ or ✗ with `file:line` errors | Reload now, create the starter |
 
-- **TUI:** Bubble Tea + Bubbles (list/table/viewport) + `huh` for the Run form. It has a k9s-like layout and keyboard shortcuts (`/` filter, `r` run, `R` re-run, `c` continue, `x` abort, `s` shell, `a` artifacts).
+- **TUI:** Bubble Tea + Bubbles (list/table/viewport) + `huh` for the Run form. It has a k9s-like layout and keyboard shortcuts (`/` filter, `r` run, `R` re-run, `c` carry on, `x` stop, `s` shell, `a` artifacts).
 - **Web:** templ pages. htmx swaps fragments, and the htmx SSE extension handles live logs and status. No JS build step.
 - **Headless/CI:** `wendy serve` (web only); `wendy run --plan ci-matrix --plain` (no UI, exit code = verdict).
 - **Config files are the source of truth.** The UIs never modify a hand-written file, so those stay reviewable in git. The UIs do create and edit testbeds, parts, tests and suites (below), and write them to one generated file, `wendy-ui.cue`, in the first-launch directory (`./.wendy/`). The other exception is the first-launch starter file, which is only written when no config exists.
 
-**Editing in the UIs.** The web UI's Plans, Testbeds and Suites subtabs have **New**, **Edit**, **Copy and edit…** and **Delete**, which is disabled with the reason while something uses the entry; the TUI has them for tests and suites (`a`, `e`, `c`, `D`). Both build their forms from one set of field tables (`internal/ui/fields.go`), so they offer the same settings:
+**Editing in the UIs.** The web UI's Plans, Testbeds and Suites subtabs have **New**, **Edit**, **Copy and edit…** and **Delete**; the TUI has them for tests and suites (`a`, `e`, `c`, `D`). Wherever the web UI creates an entry it also deletes one of the UI file's, after asking: on the entry's page and in its edit form, disabled with what uses it while anything does. Forms that only pick an entry (a testbed form's part pickers, Run a plan…'s Plan card) don't delete it, since the page is about something else and a delete there would skip the form's Save and Cancel. An entry from a hand-written file is deleted there, and a built-in can't be. Both UIs build their forms from one set of field tables (`internal/ui/fields.go`), so they offer the same settings:
 
 | Edits | Settings |
 |---|---|

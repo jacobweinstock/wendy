@@ -87,7 +87,7 @@ func TestPlanDetail(t *testing.T) {
 		`<th>Testbed</th><td><a href="/testbeds/testbeds/m">m</a> <span class="mute">4 combinations</span>`,
 		`<th>Suites</th><td> <a href="/suites/suites/smoke">smoke</a>`,
 		`<th>Only tests with labels</th><td><span class="mute">Every test</span>`,
-		"<th>Options</th><td>keep the testbed if it fails · collect diagnostics on failure · record machine consoles</td>",
+		"<th>Options</th><td>keep the testbed if something fails · collect diagnostics on failure · record machine consoles</td>",
 		`<th>Last execution</th><td><a href="/executions/2">#2</a> <span class="chip fail">✗ failed</span>`,
 		`hx-vals="{"plan":"nightly"}">Run</button>`,
 		`<a class="btn" href="/run/nightly">Change and run…</a>`,
@@ -286,5 +286,65 @@ func TestMatrixHint(t *testing.T) {
 	svc.Reload()
 	if tb := svc.Catalog().Testbeds["example"]; tb == nil || len(tb.Combinations) != 2 {
 		t.Errorf("the example makes %+v, want two combinations; errors: %v", tb, svc.Catalog().AllErrors())
+	}
+}
+
+// Every subtab that can make an entry deletes one of yours from its pane, or
+// says what keeps it in use. An entry from your own file says to delete it
+// there, and a built-in offers neither.
+func TestDetailPanesDelete(t *testing.T) {
+	s, svc := editServer(t)
+	for _, e := range []struct {
+		kind, name string
+		v          map[string]any
+	}{
+		{config.KindStep, "add-worker", map[string]any{"uses": "capt.scale", "with": map[string]any{"target": "worker", "by": int64(1)}}},
+		{config.KindTest, "t", map[string]any{"steps": []any{map[string]any{"uses": "add-worker"}}}},
+		{config.KindSuite, "s", map[string]any{"tests": []any{"t"}}},
+		{config.KindHardware, "hw", map[string]any{}},
+		{config.KindHardware, "spare", map[string]any{}},
+		{config.KindTestbed, "lab", map[string]any{"hardware": "hw"}},
+		{config.KindPlan, "p", map[string]any{"testbed": "lab", "suites": []any{"s"}}},
+	} {
+		if err := svc.SaveEntry(e.kind, "", e.name, e.v); err != nil {
+			t.Fatalf("%s %s: %v", e.kind, e.name, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(svc.StarterDir, "mine.cue"), []byte("package local\n\ntestbeds: mine: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	svc.Reload()
+
+	for path, used := range map[string]string{
+		"/plans/p":                 "",
+		"/testbeds/hardware/spare": "",
+		"/testbeds/testbeds/lab":   "plan p",
+		"/testbeds/hardware/hw":    "testbed lab",
+		"/suites/suites/s":         "plan p",
+		"/suites/tests/t":          "suite s",
+		"/suites/steps/add-worker": "test t",
+	} {
+		page := shownPage(t, s, path)
+		if used == "" {
+			if !strings.Contains(page, `hx-post="/edit/`) || !strings.Contains(page, `/delete" hx-confirm="Delete `) || strings.Contains(page, "disabled>Delete") {
+				t.Errorf("%s has no enabled Delete", path)
+			}
+		} else if !strings.Contains(page, "Used by "+used+", so it can't be deleted.") || !strings.Contains(page, `class="btn danger" disabled>Delete`) {
+			t.Errorf("%s does not say %s keeps it from being deleted", path, used)
+		}
+	}
+	mine := shownPage(t, s, "/testbeds/testbeds/mine")
+	if !strings.Contains(mine, "which Wendy doesn't change; delete it there.") || strings.Contains(mine, ">Delete testbed<") {
+		t.Error("an entry from your own file does not say where to delete it")
+	}
+	if qs := shownPage(t, s, "/testbeds/testbeds/quickstart"); strings.Contains(qs, ">Delete testbed<") || strings.Contains(qs, "delete it there") {
+		t.Error("a built-in offers to be deleted")
+	}
+
+	if rec := post(t, s, "/edit/hardware/spare/delete", nil, nil); rec.Header().Get("HX-Redirect") != "/testbeds/hardware" {
+		t.Errorf("deleting from the pane = %v %s", rec.Header(), rec.Body)
+	}
+	if svc.Catalog().Parts(config.KindHardware)["spare"] != nil {
+		t.Error("the part was not deleted")
 	}
 }

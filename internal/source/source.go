@@ -202,17 +202,28 @@ func (b Builder) BuildTinkerbell(ctx context.Context, co Checkout) (TinkerbellOu
 		fmt.Fprintf(b.Log, "%s is already built and published\n", co.Version)
 		return out, nil
 	}
+	// `make image` is a plain `docker build`, whose result reaches the image
+	// store `docker push` reads only on the engine's own builder, which is
+	// named after the Docker context. Any other builder, ours or the user's
+	// current one, would leave it in that builder's cache.
+	engineBuilder, err := b.Run(ctx, co.Dir, nil, nil, "docker", "context", "show")
+	if err != nil {
+		return out, err
+	}
 	img := out.Image + ":" + co.Version
-	steps := [][]string{
-		{"make", "cross-compile", "image", "IMAGE_NAME=" + img, "VERSION=" + co.Version},
-		{"docker", "push", img},
-		{"make", "cross-compile-agent", "build-push-image-agent", "IMAGE_NAME_AGENT=" + out.AgentImage, "VERSION=" + co.Version},
+	steps := []struct {
+		env []string
+		cmd []string
+	}{
+		{[]string{"BUILDX_BUILDER=" + engineBuilder}, []string{"make", "cross-compile", "image", "IMAGE_NAME=" + img, "VERSION=" + co.Version}},
+		{nil, []string{"docker", "push", img}},
+		{[]string{"BUILDX_BUILDER=" + registry.Builder}, []string{"make", "cross-compile-agent", "build-push-image-agent", "IMAGE_NAME_AGENT=" + out.AgentImage, "VERSION=" + co.Version}},
 		// Packaged, not pushed: the package carries the version as its
 		// appVersion, which is what the image tags follow.
-		{"make", "helm-package", "VERSION=" + co.Version},
+		{nil, []string{"make", "helm-package", "VERSION=" + co.Version}},
 	}
 	for _, st := range steps {
-		if _, err := b.Run(ctx, co.Dir, b.Log, []string{"BUILDX_BUILDER=" + registry.Builder}, st[0], st[1:]...); err != nil {
+		if _, err := b.Run(ctx, co.Dir, b.Log, st.env, st.cmd[0], st.cmd[1:]...); err != nil {
 			return out, err
 		}
 	}

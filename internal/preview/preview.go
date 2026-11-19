@@ -39,7 +39,10 @@ type Selection struct {
 
 // Preview is a resolved selection.
 type Preview struct {
-	Selection      Selection      `json:"selection"`
+	Selection Selection `json:"selection"`
+	// Effective is what the preview runs: the selection over its plan, with
+	// every default filled in.
+	Effective      Selection      `json:"effective"`
 	Label          string         `json:"label"`
 	Edited         bool           `json:"edited,omitempty"`
 	Key            string         `json:"key"`
@@ -117,13 +120,10 @@ func New(cat *config.Catalog, sel Selection) (*Preview, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &Preview{Selection: sel, Label: label, Edited: edited, Parallel: max(eff.Parallel, 1), Keep: eff.Keep}
-	if p.Keep == "" {
-		p.Keep = "never"
-	}
-	if eff.PauseOnFailure != nil {
-		p.PauseOnFailure = *eff.PauseOnFailure
-	}
+	run := eff
+	run.Plan, run.SetupOnly = sel.Plan, sel.SetupOnly
+	run = Normalize(run)
+	p := &Preview{Selection: sel, Effective: run, Label: label, Edited: edited, Parallel: run.Parallel, Keep: run.Keep, PauseOnFailure: *run.PauseOnFailure}
 	p.Key = key(sel.Plan, edited, eff)
 
 	userFilter, err := types.ParseLabelFilter(eff.LabelFilter)
@@ -171,23 +171,14 @@ func New(cat *config.Catalog, sel Selection) (*Preview, error) {
 		raw = tb.Combinations
 	}
 
-	suites := eff.Suites
-	if len(suites) == 0 {
-		suites = []string{"smoke"}
-	}
-	if sel.SetupOnly {
-		suites = nil
-	}
+	suites := run.Suites
 	for _, s := range suites {
 		if _, ok := cat.Suites[s]; !ok {
 			return nil, unknown("suite", s, config.Names(cat.Suites))
 		}
 	}
 
-	diagnostics := config.DefaultDiagnostics()
-	if eff.Diagnostics != nil {
-		diagnostics = *eff.Diagnostics
-	}
+	diagnostics := *run.Diagnostics
 	for _, rc := range raw {
 		c, err := buildCombination(cat, rc, axes, suites, userFilter, diagnostics)
 		if err != nil {
@@ -254,6 +245,31 @@ func effective(cat *config.Catalog, sel Selection) (Selection, string, bool, err
 		eff.Diagnostics = sel.Diagnostics
 	}
 	return eff, sel.Plan, edited, nil
+}
+
+// Normalize is sel with every default filled in: the smoke suite (none when it
+// only sets up), one combination at a time, the testbed torn down, a failed
+// step stopping the combination, and the default diagnostics. A plan's own
+// settings are not applied; New applies them first.
+func Normalize(sel Selection) Selection {
+	switch {
+	case sel.SetupOnly:
+		sel.Suites = nil
+	case len(sel.Suites) == 0:
+		sel.Suites = []string{"smoke"}
+	}
+	sel.Parallel = max(sel.Parallel, 1)
+	if sel.Keep == "" {
+		sel.Keep = "never"
+	}
+	if sel.PauseOnFailure == nil {
+		sel.PauseOnFailure = new(bool)
+	}
+	if sel.Diagnostics == nil {
+		d := config.DefaultDiagnostics()
+		sel.Diagnostics = &d
+	}
+	return sel
 }
 
 // key identifies a selection across executions, so estimates come from

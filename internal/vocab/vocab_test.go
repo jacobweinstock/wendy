@@ -80,7 +80,7 @@ func TestChoice(t *testing.T) {
 	if got := vocab.Choice("topology", "colocated"); got != "On the management cluster" {
 		t.Errorf("topology colocated reads %q", got)
 	}
-	if got := vocab.Choice("keep", "failed"); got != "If it fails" {
+	if got := vocab.Choice("keep", "failed"); got != "Keep the testbed if something fails" {
 		t.Errorf("keep failed reads %q", got)
 	}
 	if got := vocab.Choice("topology", "sideways"); got != "sideways" {
@@ -92,7 +92,7 @@ func TestChoice(t *testing.T) {
 }
 
 func TestChoicesHaveNoRetiredWords(t *testing.T) {
-	for _, path := range []string{"topology", "bootMode", "network.family", "arch", "cni", "bmc.protocol", "diagnostics", "keep", "step.kind"} {
+	for _, path := range []string{"topology", "bootMode", "network.family", "arch", "cni", "bmc.protocol", "diagnostics", "keep", "pauseOnFailure", "step.kind"} {
 		for _, v := range vocab.ChoiceValues(path) {
 			label := vocab.Choice(path, v)
 			if label == "" {
@@ -105,9 +105,9 @@ func TestChoicesHaveNoRetiredWords(t *testing.T) {
 			}
 		}
 	}
-	for _, path := range []string{"topology", "bootMode", "network.family"} {
+	for _, path := range []string{"topology", "bootMode", "network.family", "keep", "pauseOnFailure"} {
 		if !vocab.Described(path) {
-			t.Errorf("a testbed setting, %s, has a choice with no description", path)
+			t.Errorf("%s has a choice with no description", path)
 		}
 	}
 	if vocab.Described("cni") || vocab.Described("bogus") {

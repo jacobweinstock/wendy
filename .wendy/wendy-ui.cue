@@ -28,5 +28,85 @@ wendy.#Config & {
 				}
 			}
 		}
+		tinkerbell: {
+			local: {
+				source: {
+					repo: "/home/tink/repos/tinkerbell/tinkerbell"
+				}
+			}
+		}
+	}
+	plans: {
+		"quickstart-ipv6": {
+			keep: "always"
+			suites: ["smoke"]
+			testbed: "quickstart-ipv6"
+		}
+	}
+	testbeds: {
+		"capt-e2e-copy": {
+			description: "The CAPT playground's e2e matrix: topology × IP family × boot mode × registry"
+			hardware:    "small-no-spare"
+			matrix: {
+				axes: {
+					bootMode: {
+						isoboot: {
+							bootMode: "isoboot"
+						}
+						netboot: {
+							bootMode: "netboot"
+						}
+					}
+					ipFamily: {
+						ipv4: {
+							network: {
+								family: "ipv4"
+							}
+						}
+						ipv6: {
+							network: {
+								family: "ipv6"
+							}
+						}
+					}
+					registry: {
+						direct: {
+							network: {
+								mirror: {
+									enabled: false
+								}
+							}
+						}
+						mirror: {
+							network: {
+								mirror: {
+									enabled: true
+								}
+							}
+						}
+					}
+					topology: {
+						colocated: {
+							topology: "colocated"
+						}
+						external: {
+							topology: "external"
+						}
+					}
+				}
+				exclude: []
+				order: ["topology", "ipFamily", "bootMode", "registry"]
+			}
+			tinkerbell:      "local"
+			workloadCluster: "k8s-1.35-kube-router"
+		}
+		"quickstart-ipv6": {
+			bootMode: "isoboot"
+			hardware: "1x1"
+			network: {
+				family: "ipv6"
+			}
+			workloadCluster: "k8s-1.36-kube-router"
+		}
 	}
 }

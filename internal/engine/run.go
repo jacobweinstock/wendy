@@ -96,7 +96,7 @@ func (e *Engine) Start(p *preview.Preview, configDigest string) (*Execution, err
 		done: make(chan struct{}), builds: &Builds{}, pauses: map[string]chan string{},
 	}
 	r.sum = Summary{
-		ID: id, Label: p.Label, Key: p.Key, Edited: p.Edited, Selection: p.Selection, ConfigDigest: configDigest,
+		ID: id, Label: p.Label, Key: p.Key, Edited: p.Edited, Selection: p.Selection, Effective: p.Effective, ConfigDigest: configDigest,
 		Status: event.Running, Started: time.Now(), PID: os.Getpid(),
 		Steps: StepCounts{Total: p.StepCount() + len(p.Builds)},
 	}
@@ -121,7 +121,8 @@ func (r *Execution) Wait() event.Status {
 // Done is closed when the execution finishes.
 func (r *Execution) Done() <-chan struct{} { return r.done }
 
-// Cancel stops the execution. Teardown still happens.
+// Cancel stops the execution. Each combination's testbed is then kept or torn
+// down as the preview's Keep says, paused ones included.
 func (r *Execution) Cancel() {
 	r.cancel()
 	r.mu.Lock()
@@ -134,8 +135,10 @@ func (r *Execution) Cancel() {
 	}
 }
 
-// Decide answers a paused combination: Retry, Continue or Abort. With
-// combination empty, it answers whichever combination is paused.
+// Decide answers a paused combination: Retry, Continue or Abort. Abort stops
+// the combination, whose testbed is then kept or torn down as the preview's
+// Keep says. With combination empty, it answers whichever combination is
+// paused.
 func (r *Execution) Decide(combination, decision string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -163,11 +166,12 @@ func (r *Execution) Summary() Summary {
 }
 
 func (r *Execution) update(fn func(*Summary)) {
+	// The file is written under the lock too: combinations update the summary
+	// concurrently, and a copy would share their slices and maps.
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	fn(&r.sum)
-	s := r.sum
-	r.mu.Unlock()
-	_ = WriteSummary(r.Dir, &s)
+	_ = WriteSummary(r.Dir, &r.sum)
 }
 
 func (r *Execution) combination(name string, fn func(*CombinationSummary)) {
@@ -196,24 +200,27 @@ func (r *Execution) execute() {
 
 	r.build()
 
+	// Slots are taken here, in the order the combinations are listed, and each
+	// combination has started before the next one waits for a slot.
 	sem := make(chan struct{}, r.Preview.Parallel)
 	var wg sync.WaitGroup
 	for _, c := range r.Preview.Combinations {
+		select {
+		case sem <- struct{}{}:
+		case <-r.ctx.Done():
+		}
+		if r.ctx.Err() != nil {
+			r.combination(c.Name, func(cs *CombinationSummary) { cs.Status = event.Cancelled })
+			continue
+		}
+		r.combination(c.Name, func(cs *CombinationSummary) { cs.Status = event.Running })
+		r.emit(event.Event{Type: event.CombinationStarted, Combination: c.Name, Status: event.Running, Attrs: map[string]any{"labels": c.Labels, "dir": combinationDirName(c.Name)}})
 		wg.Add(1)
-		go func(c *preview.Combination) {
+		go func() {
 			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-			case <-r.ctx.Done():
-			}
-			defer func() {
-				select {
-				case <-sem:
-				default:
-				}
-			}()
+			defer func() { <-sem }()
 			r.runCombination(c)
-		}(c)
+		}()
 	}
 	wg.Wait()
 
@@ -302,15 +309,11 @@ type combinationExecution struct {
 	scIndex int
 }
 
+// runCombination runs a combination that has started: its builds' verdict,
+// setup, suites, diagnostics and teardown.
 func (r *Execution) runCombination(c *preview.Combination) {
 	start := time.Now()
 	dir := filepath.Join(r.Dir, combinationDirName(c.Name))
-	if r.ctx.Err() != nil {
-		r.combination(c.Name, func(cs *CombinationSummary) { cs.Status = event.Cancelled })
-		return
-	}
-	r.combination(c.Name, func(cs *CombinationSummary) { cs.Status = event.Running })
-	r.emit(event.Event{Type: event.CombinationStarted, Combination: c.Name, Status: event.Running, Attrs: map[string]any{"labels": c.Labels, "dir": combinationDirName(c.Name)}})
 
 	finish := func(st event.Status, kept bool) {
 		ms := time.Since(start).Milliseconds()
@@ -396,9 +399,6 @@ func (r *Execution) runCombination(c *preview.Combination) {
 
 	status := cx.verdict()
 	keep := r.Preview.Keep == "always" || (r.Preview.Keep == "failed" && failing(status))
-	if cx.aborted {
-		keep = false
-	}
 	if !keep {
 		cx.teardown()
 	}

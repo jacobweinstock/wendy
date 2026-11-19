@@ -23,7 +23,15 @@ var choices = map[string][]choice{
 	"cni":          {{"cilium", "Cilium", ""}, {"kube-router", "kube-router", ""}},
 	"bmc.protocol": {{"redfish", "Redfish", ""}, {"ipmi", "IPMI", ""}},
 	"diagnostics":  {{"onFailure", "On failure", ""}, {"always", "Always", ""}, {"never", "Never", ""}},
-	"keep":         {{"never", "Never", ""}, {"failed", "If it fails", ""}, {"always", "Always", ""}},
+	"keep": {
+		{"never", "Tear down the testbed", "Whether it passed or failed."},
+		{"failed", "Keep the testbed if something fails", "So you can look around. Tear it down from the execution's page when you're done."},
+		{"always", "Always keep the testbed", "Whether it passed or failed. Tear it down from the execution's page when you're done."},
+	},
+	"pauseOnFailure": {
+		{"false", "Stop", "Diagnostics are collected, the rest is skipped, and the testbed is kept or torn down as When it finishes says."},
+		{"true", "Pause and wait for me", "Everything stays up at the failed step. On the execution's page you can retry the step, carry on with the rest, or stop."},
+	},
 	"step.kind": {
 		{"uses", "Named step", ""},
 		{"exec", "Command", ""},

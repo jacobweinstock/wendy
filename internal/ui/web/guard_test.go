@@ -18,8 +18,9 @@ import (
 
 // visible is the text people read on a page, one piece per line: text, and
 // the title, aria-label, placeholder and hx-confirm attributes. It skips what
-// is shown as code (<pre>, <code>, .mono, and an option's title, which holds
-// its CUE value) and what is never shown (<script>, <style>).
+// is shown as code (<pre>, <code>, .mono, an option's title, which holds its
+// CUE value, and a copy button's title, which is the command it copies) and
+// what is never shown (<script>, <style>).
 func visible(page string) string {
 	doc, err := html.Parse(strings.NewReader(page))
 	if err != nil {
@@ -43,7 +44,7 @@ func visible(page string) string {
 			}
 			for _, a := range n.Attr {
 				switch {
-				case a.Key == "title" && n.Data == "option":
+				case a.Key == "title" && (n.Data == "option" || attr(n, "data-copy") != ""):
 				case a.Key == "title", a.Key == "aria-label", a.Key == "placeholder", a.Key == "hx-confirm":
 					out = append(out, a.Val)
 				}
@@ -121,7 +122,7 @@ func labelledValues() map[string]bool {
 		add(f.Path, f.Options)
 	}
 	add("step.kind", ui.StepKinds)
-	add("keep", keeps)
+	add("keep", vocab.ChoiceValues("keep"))
 	return out
 }
 
@@ -211,6 +212,55 @@ func TestGlossaryGuard(t *testing.T) {
 				t.Errorf("%s says %q (%q); use %s", p.name, f.Term, f.Context, f.Use)
 			}
 		}
+	}
+}
+
+// missingTargets are a page's htmx attributes that select an element by ID
+// that the page doesn't have. htmx then swaps nothing, so the control looks
+// as if it works and does nothing.
+func missingTargets(page string) []string {
+	doc, err := html.Parse(strings.NewReader(page))
+	if err != nil {
+		return []string{err.Error()}
+	}
+	ids := map[string]bool{}
+	var wanted []string
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			for _, a := range n.Attr {
+				switch {
+				case a.Key == "id":
+					ids[a.Val] = true
+				case (a.Key == "hx-target" || a.Key == "hx-select" || a.Key == "hx-include") && strings.HasPrefix(a.Val, "#"):
+					wanted = append(wanted, a.Key+`="`+a.Val+`"`)
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+	var out []string
+	for _, w := range wanted {
+		_, id, _ := strings.Cut(w, `="#`)
+		if !ids[strings.TrimSuffix(id, `"`)] {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+func TestHtmxTargetsAreOnThePage(t *testing.T) {
+	for _, p := range guardPages(t) {
+		_, body := get(t, p.s, p.path)
+		if missing := missingTargets(body); len(missing) > 0 {
+			t.Errorf("%s selects elements it doesn't have: %v", p.name, missing)
+		}
+	}
+	if got := missingTargets(`<div id="a"></div><select hx-get="/x" hx-target="#a" hx-select="#main"></select>`); !slices.Equal(got, []string{`hx-select="#main"`}) {
+		t.Errorf("the check finds %v, want only the missing #main", got)
 	}
 }
 

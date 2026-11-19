@@ -461,7 +461,7 @@ function editTestbed(name, copy) {
     <details class="adv"${t.nat64 || t.mirror ? " open" : ""}><summary>Advanced settings</summary>
       ${fieldHtml({ p: "nat64", l: "NAT64", t: "opts", o: [["", "Default (on with IPv6)"], ["true", "On"], ["false", "Off"]], d: "" }, t.nat64 === undefined ? "" : String(t.nat64))}
       ${fieldHtml({ p: "mirror", l: "Registry mirror", t: "bool", cl: "Pull images through a mirror on this host" }, t.mirror)}
-      ${fieldHtml({ p: "upstreams", l: "Mirror upstreams", t: "lines", h: "One registry per line.", d: "ghcr.io, quay.io, registry.k8s.io, gcr.io, docker.io" }, "")}
+      ${fieldHtml({ p: "upstreams", l: "Mirror upstreams", t: "words", h: "Separated by commas or spaces.", d: "ghcr.io, quay.io, registry.k8s.io, gcr.io, docker.io" }, "")}
     </details>
     <div class="h4">Matrix</div>
     ${t.matrix ? matrixHtml(name) + `<p class="hint">Matrices are written in CUE for now.</p>` : `<p class="hint">None: this testbed is one combination. To test several, add a <span class="mono">matrix</span> to it in CUE.</p>`}`;

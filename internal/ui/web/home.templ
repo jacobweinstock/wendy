@@ -100,9 +100,7 @@ templ waitingBanner(w waitingExecution) {
 		</div>
 		<div class="actions" style="margin:0">
 			<a class="btn primary" href={ keptTestbedURL(w.Sum.ID, w.Combination) }>Open execution</a>
-			<button class="btn" hx-post={ decisionAPI(w.Sum.ID, w.Combination, "retry") }>Retry step</button>
-			<button class="btn" hx-post={ decisionAPI(w.Sum.ID, w.Combination, "continue") } title="Record the failure and run the rest">Continue</button>
-			<button class="btn danger" hx-post={ decisionAPI(w.Sum.ID, w.Combination, "abort") } hx-confirm={ "Abort #" + w.Sum.ID + " and tear down its testbed? This deletes its clusters, VMs and network." }>Abort and tear down</button>
+			@decisionButtons(w.Sum, w.Combination, false)
 		</div>
 	</div>
 }
@@ -131,7 +129,9 @@ templ keptTestbedRow(e service.KeptTestbed) {
 			<a href={ keptTestbedURL(e.Execution, e.Combination) }><b class="mono">{ address(e) }</b></a>
 			<div class="mute" style="font-size:12px">{ e.Label + " · kept " + ago(e.Since) }</div>
 		</div>
-		<button class="btn sm" data-copy={ exportLine(e.Dir) } title={ exportLine(e.Dir) }>Copy export KUBECONFIG</button>
+		for _, c := range keptAccess(e) {
+			@copyExport(c, true)
+		}
 		<button class="btn sm danger" hx-post={ teardownAPI(e.Execution, e.Combination) } hx-confirm={ "Tear down " + address(e) + "? This deletes its clusters, VMs and network." }>Tear down…</button>
 	</div>
 }

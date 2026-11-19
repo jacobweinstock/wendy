@@ -5,20 +5,27 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/tinkerbell/wendy/internal/config"
+	"github.com/tinkerbell/wendy/internal/provider/registry"
 )
 
 type fakeGit struct {
 	calls []string
+	envs  map[string][]string
 	out   map[string]string
 }
 
-func (f *fakeGit) run(_ context.Context, _ string, _ io.Writer, _ []string, name string, args ...string) (string, error) {
+func (f *fakeGit) run(_ context.Context, _ string, _ io.Writer, env []string, name string, args ...string) (string, error) {
 	call := name + " " + strings.Join(args, " ")
 	f.calls = append(f.calls, call)
+	if f.envs == nil {
+		f.envs = map[string][]string{}
+	}
+	f.envs[call] = env
 	if strings.HasPrefix(call, "git clone") {
 		_ = os.MkdirAll(filepath.Join(args[len(args)-1], ".git"), 0o755)
 	}
@@ -67,6 +74,31 @@ func TestResolveRefInCache(t *testing.T) {
 	for i, w := range want {
 		if !strings.HasPrefix(g.calls[i], w) {
 			t.Errorf("call %d = %q, want %q", i, g.calls[i], w)
+		}
+	}
+}
+
+func TestBuildTinkerbellBuilders(t *testing.T) {
+	g := &fakeGit{out: map[string]string{"go run": "v0.1.0+dirty", "docker context show": "engine"}}
+	if _, err := (Builder{Run: g.run, Log: io.Discard}).BuildTinkerbell(context.Background(), Checkout{Dir: t.TempDir(), Dirty: true}); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"make cross-compile image":                        "BUILDX_BUILDER=engine",
+		"make cross-compile-agent build-push-image-agent": "BUILDX_BUILDER=" + registry.Builder,
+	}
+	for prefix, env := range want {
+		found := false
+		for call, got := range g.envs {
+			if strings.HasPrefix(call, prefix) {
+				found = true
+				if !slices.Contains(got, env) {
+					t.Errorf("%s env = %q, want %s", call, got, env)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("no %q call in %q", prefix, g.calls)
 		}
 	}
 }

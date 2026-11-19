@@ -182,6 +182,32 @@ func TestVerdicts(t *testing.T) {
 	}
 }
 
+func TestCombinationsStartInOrder(t *testing.T) {
+	for _, parallel := range []int{1, 2} {
+		p := testPreview(nil, preview.Test{Name: "a", Steps: []preview.Step{step("t.ok")}})
+		p.Parallel = parallel
+		first := *p.Combinations[0]
+		p.Combinations = nil
+		var want []string
+		for i := range 6 {
+			c := first
+			c.Name = "c" + strconv.Itoa(i)
+			p.Combinations = append(p.Combinations, &c)
+			want = append(want, c.Name)
+		}
+		_, evs := run(t, p)
+		var got []string
+		for _, e := range evs {
+			if e.Type == event.CombinationStarted {
+				got = append(got, e.Combination)
+			}
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%d at once started %v, want %v", parallel, got, want)
+		}
+	}
+}
+
 func TestTimeout(t *testing.T) {
 	slow := step("t.slow")
 	slow.Timeout = "50ms"
@@ -310,20 +336,27 @@ func TestPauseRetryContinue(t *testing.T) {
 	}
 }
 
-func TestPauseAbort(t *testing.T) {
-	p := testPreview([]preview.Step{step("t.track", "net")},
-		preview.Test{Name: "a", Steps: []preview.Step{step("t.fail")}},
-		preview.Test{Name: "b", Steps: []preview.Step{step("t.ok")}},
-	)
-	p.PauseOnFailure = true
-	p.Keep = "always"
-	decisions = []string{Abort}
-	r, evs := run(t, p)
-	if got := last(evs, "s", "b", "t.ok"); got != event.Skipped {
-		t.Errorf("after abort = %s", got)
-	}
-	if r.Summary().Combinations[0].Kept || strings.Join(torn, ",") != "net" {
-		t.Errorf("abort must tear down: kept=%v torn=%v", r.Summary().Combinations[0].Kept, torn)
+// Stopping a paused combination skips the rest, and its testbed is then kept
+// or torn down as Keep says, as when a step fails with no pause.
+func TestPauseStop(t *testing.T) {
+	for keep, wantKept := range map[string]bool{"always": true, "failed": true, "never": false} {
+		t.Run(keep, func(t *testing.T) {
+			p := testPreview([]preview.Step{step("t.track", "net")},
+				preview.Test{Name: "a", Steps: []preview.Step{step("t.fail")}},
+				preview.Test{Name: "b", Steps: []preview.Step{step("t.ok")}},
+			)
+			p.PauseOnFailure = true
+			p.Keep = keep
+			decisions = []string{Abort}
+			r, evs := run(t, p)
+			if got := last(evs, "s", "b", "t.ok"); got != event.Skipped {
+				t.Errorf("after stop = %s", got)
+			}
+			kept := r.Summary().Combinations[0].Kept
+			if kept != wantKept || (strings.Join(torn, ",") == "net") == wantKept {
+				t.Errorf("keep %s: kept=%v torn=%v", keep, kept, torn)
+			}
+		})
 	}
 }
 

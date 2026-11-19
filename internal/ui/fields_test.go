@@ -68,7 +68,7 @@ func TestSetKinds(t *testing.T) {
 		text   string
 	}{
 		{hw, HardwareFields, "machines.worker.count", "3"},
-		{tb, TestbedFields, "network.mirror.upstreams", "ghcr.io\n\n quay.io "},
+		{tb, TestbedFields, "network.mirror.upstreams", "ghcr.io, quay.io\n\n gcr.io "},
 		{tb, TinkerbellFields, "values", "a:\n  b: 1"},
 	} {
 		if err := Set(c.v, field(t, c.fields, c.path), c.text); err != nil {
@@ -78,7 +78,7 @@ func TestSetKinds(t *testing.T) {
 	if got, _ := lookup(hw, "machines.worker.count"); got != int64(3) {
 		t.Errorf("count = %#v, want the integer the schema requires", got)
 	}
-	if got, _ := lookup(tb, "network.mirror.upstreams"); !reflect.DeepEqual(got, []any{"ghcr.io", "quay.io"}) {
+	if got, _ := lookup(tb, "network.mirror.upstreams"); !reflect.DeepEqual(got, []any{"ghcr.io", "quay.io", "gcr.io"}) {
 		t.Errorf("upstreams = %#v", got)
 	}
 	if got, _ := lookup(tb, "values.a.b"); got != int64(1) {

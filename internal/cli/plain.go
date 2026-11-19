@@ -132,7 +132,7 @@ func where(e event.Event) string {
 }
 
 // paused shows where to look at a paused combination, then asks the
-// terminal what to do, or aborts when there is no one to ask.
+// terminal what to do, or stops it when there is no one to ask.
 func (p *plainPrinter) paused(e event.Event) {
 	id := p.r.ID
 	var f *engine.Failure
@@ -150,7 +150,7 @@ func (p *plainPrinter) paused(e event.Event) {
 	}
 	fmt.Fprintf(p.w, "#%s    kubeconfigs: %s\n", id, filepath.Join(p.svc.ExecutionDir(id), dir, "kubeconfigs"))
 	if !p.interactive {
-		fmt.Fprintf(p.w, "#%s    not a terminal: aborting (use the TUI or the web UI to decide)\n", id)
+		fmt.Fprintf(p.w, "#%s    not a terminal: stopping (use the TUI or the web UI to decide)\n", id)
 		_ = p.r.Decide(e.Combination, engine.Abort)
 		return
 	}
@@ -160,7 +160,7 @@ func (p *plainPrinter) paused(e event.Event) {
 
 func (p *plainPrinter) ask(combination string) {
 	for {
-		fmt.Fprintf(p.w, "#%s    [r]etry step  [c]ontinue  [x] abort and tear down > ", p.r.ID)
+		fmt.Fprintf(p.w, "#%s    [r]etry step  [c]arry on  [x] stop > ", p.r.ID)
 		line, err := p.in.ReadString('\n')
 		if err != nil {
 			_ = p.r.Decide(combination, engine.Abort)

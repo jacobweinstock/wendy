@@ -467,10 +467,10 @@ func (m *model) helpView() string {
 			{"k", "copy KUBECONFIG export"},
 			{"s", "shell"},
 			{"r", "retry step (paused)"},
-			{"c", "continue (paused)"},
-			{"x", "cancel run / abort"},
+			{"c", "carry on (paused)"},
+			{"x", "cancel run / stop (paused)"},
 			{"R", "re-run (failed combos in grid)"},
-			{"w b d", "diagnostics: workflow, BMC log, dump"},
+			{"w T b d", "diagnostics: workflow, Tinkerbell logs, BMC log, cluster dumps"},
 		}...)
 	case m.tab == tabRuns:
 		keys = append(keys, [][2]string{{"R", "re-run"}, {"x", "cancel"}, {"D", "delete run (asks)"}, {"tab", "status filter"}}...)

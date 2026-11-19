@@ -90,18 +90,24 @@ templ editPage(l layout, d editData) {
 // deleted. A new entry or a copy has nothing to delete.
 templ deleteAction(d editData) {
 	if d.Mode == "edit" {
-		if len(d.UsedBy) > 0 {
-			<button type="button" class="btn danger" disabled>{ "Delete " + singular(d.Kind) }</button>
-			<span class="disabled-why">{ "Used by " + strings.Join(d.UsedBy, ", ") + ", so it can't be deleted." }</span>
-		} else {
-			<button
-				type="button"
-				class="btn danger"
-				hx-post={ string(editURL(d.Kind, d.Orig)) + "/delete" }
-				hx-confirm={ "Delete " + singular(d.Kind) + " " + d.Orig + "? It is removed from " + d.UIFile + "." }
-				hx-swap="none"
-			>{ "Delete " + singular(d.Kind) }</button>
-		}
+		@deleteButton(d.Kind, d.Orig, d.UsedBy, d.UIFile)
+	}
+}
+
+// deleteButton deletes an entry of the UI file, which file names, after
+// asking. While other entries use it, it is disabled and says which.
+templ deleteButton(kind, name string, usedBy []string, file string) {
+	if len(usedBy) > 0 {
+		<button type="button" class="btn danger" disabled>{ "Delete " + singular(kind) }</button>
+		<span class="disabled-why">{ "Used by " + strings.Join(usedBy, ", ") + ", so it can't be deleted." }</span>
+	} else {
+		<button
+			type="button"
+			class="btn danger"
+			hx-post={ string(editURL(kind, name)) + "/delete" }
+			hx-confirm={ "Delete " + singular(kind) + " " + name + "? It is removed from " + file + "." }
+			hx-swap="none"
+		>{ "Delete " + singular(kind) }</button>
 	}
 }
 
@@ -253,9 +259,11 @@ templ partPicker(d editData, kind string) {
 	</div>
 }
 
-// pickedLink opens the part a picker shows. A part written in the config file
-// has no page, so it has no link. A picker's summary reply swaps it out of
-// band as the choice changes.
+// pickedLink opens the part a picker shows, in a new tab. A part written in
+// the config file has no page, so it has no link. A picker's summary reply
+// swaps it out of band as the choice changes. A picker never deletes its
+// part: the part is shared by every testbed that picks it, so it is deleted
+// from its own page.
 templ pickedLink(kind, name string, oob bool) {
 	<span
 		id={ "open-" + kind }

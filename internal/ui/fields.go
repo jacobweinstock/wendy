@@ -91,7 +91,7 @@ var TestbedFields = []Field{
 	{Path: "network.family", Label: "IP version", Kind: FSelect, Options: []string{"ipv4", "ipv6"}, Default: "ipv4"},
 	{Path: "network.nat64", Label: "NAT64", Kind: FBool, Advanced: true, Default: "on with IPv6", Help: "lets IPv6 machines reach registries that are IPv4 only"},
 	{Path: "network.mirror.enabled", Label: "Registry mirror", Kind: FBool, Advanced: true, Default: "false", Help: "machines pull container images through a registry mirror that Wendy runs"},
-	{Path: "network.mirror.upstreams", Label: "Mirror upstreams", Kind: FLines, Advanced: true, Default: "ghcr.io, quay.io, registry.k8s.io, gcr.io, docker.io", Help: "the registries the mirror serves, one per line"},
+	{Path: "network.mirror.upstreams", Label: "Mirror upstreams", Kind: FWords, Advanced: true, Default: "ghcr.io, quay.io, registry.k8s.io, gcr.io, docker.io", Help: "the registries the mirror serves, separated by commas or spaces"},
 }
 
 // PlanDiagnosticsFields are the diagnostics settings of an execution: when to

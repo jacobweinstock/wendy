@@ -96,8 +96,8 @@ func selectionFlags(cmd *cobra.Command) *preview.Selection {
 	f.StringArrayVarP(&sel.Suites, "suite", "s", nil, "suites to run (repeatable)")
 	f.StringVarP(&sel.LabelFilter, "label-filter", "l", "", "Ginkgo label filter, ANDed with the combination's own")
 	f.IntVar(&sel.Parallel, "parallel", 0, "combinations at once")
-	f.StringVar(&sel.Keep, "keep", "", "keep the testbed: never, failed or always")
-	cmd.Flags().Bool("pause-on-failure", false, "wait for a decision before tearing down after a failure")
+	f.StringVar(&sel.Keep, "keep", "", "when it finishes: never (tear down the testbed), failed (keep the testbed if something fails) or always (always keep the testbed)")
+	cmd.Flags().Bool("pause-on-failure", false, "when a step fails, pause and wait for me, with everything up, to retry the step, carry on or stop; without it, the combination stops")
 	return sel
 }
 

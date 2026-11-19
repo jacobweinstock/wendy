@@ -4,6 +4,8 @@ import (
 	"html"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"github.com/tinkerbell/wendy/internal/engine"
 	"github.com/tinkerbell/wendy/internal/event"
 	"github.com/tinkerbell/wendy/internal/preview"
+	"github.com/tinkerbell/wendy/internal/service"
 )
 
 var listedExecution = regexp.MustCompile(`<td><a href="/executions/(\d+)">#`)
@@ -130,9 +133,10 @@ func TestExecutionSummaryAndFailureCards(t *testing.T) {
 		"/executions/5": {
 			`<span class="chip pause">‖ paused after a failure</span>`,
 			`hx-confirm="Cancel #5? Its testbeds are torn down unless kept.">Cancel execution</button>`,
-			`<span class="mute">Collected so far:</span>`, ">Retry step</button>",
-			`Continue <span class="mute">(record the failure, run the rest)</span>`,
-			`hx-confirm="Abort #5 and tear down its testbed? This deletes its clusters, VMs and network.">Abort and tear down</button>`,
+			`<span class="mute">Collected so far:</span>`, `<button class="btn primary" hx-post="/api/executions/5/retry?combination=a-net">Retry step</button>`,
+			`Carry on <span class="mute">(record the failure, run the rest)</span>`,
+			// Plan nightly keeps the testbed if something fails, so Stop keeps it.
+			`hx-confirm="Stop #5? Its testbed is kept so you can look around; tear it down when you're done.">Stop</button>`,
 		},
 	} {
 		page := shownPage(t, s, path)
@@ -165,6 +169,284 @@ func keptCards(page string) (open []string, folded map[string]string) {
 	return open, folded
 }
 
+var changeAndRun = regexp.MustCompile(`<a class="btn" href="(/run\?[^"]*)">Change and run…</a>`)
+
+// A Tinkerbell on its own cluster has its kubeconfig on its row, and a
+// cluster with no kubeconfig yet has no buttons.
+func TestKeptRowsReachTinkerbellsOwnCluster(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "kubeconfigs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "kubeconfigs", engine.TinkerbellCluster), []byte("kind: Config\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e := service.KeptTestbed{Execution: "9", Dir: dir, State: engine.State{Clusters: map[string]string{
+		engine.TinkerbellCluster: filepath.Join(dir, "kubeconfigs", engine.TinkerbellCluster),
+		engine.ManagementCluster: filepath.Join(dir, "kubeconfigs", engine.ManagementCluster),
+	}}}
+	clusters := map[string]string{}
+	for _, r := range keptRows(e) {
+		if r.Cluster != nil {
+			clusters[r.Label] = clusterLabel(r.Cluster.Cluster)
+		}
+	}
+	if len(clusters) != 1 || clusters["Tinkerbell"] != "Tinkerbell cluster" {
+		t.Errorf("rows with a cluster to reach = %v, want only Tinkerbell's", clusters)
+	}
+}
+
+// Stopping a paused combination says first whether its testbed is kept.
+func TestStopConfirmSaysWhatHappensToTheTestbed(t *testing.T) {
+	for keep, want := range map[string]string{
+		"never":  "Stop #7 and tear down its testbed?",
+		"failed": "Stop #7? Its testbed is kept",
+		"always": "Stop #7? Its testbed is kept",
+	} {
+		sum := &engine.Summary{ID: "7", Effective: preview.Selection{Keep: keep}}
+		if got := stopConfirm(sum); !strings.HasPrefix(got, want) {
+			t.Errorf("keep %s: %q, want %q…", keep, got, want)
+		}
+	}
+}
+
+// A live execution's grid says which combination is running, where it is and
+// for how long.
+func TestGridShowsWhatIsRunning(t *testing.T) {
+	s, svc := fixtureServer(t)
+	addExecution(t, svc, "6", preview.Selection{Plan: "nightly"}, event.Running, func(i int, c *engine.CombinationSummary, _ *preview.Combination, _ string) {
+		if i == 0 {
+			c.Nodes["setup"] = event.Passed
+			return
+		}
+		c.Status = event.Waiting
+	})
+	stream, err := event.Create(filepath.Join(svc.ExecutionDir("6"), "events.jsonl"), "6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream.Emit(event.Event{Type: event.StepStarted, Combination: "a-net", Path: []string{"smoke", "deploy", "capt.cluster.create"}, Status: event.Running})
+	_ = stream.Close()
+
+	page := shownPage(t, s, "/executions/6?view=grid")
+	status := func(st event.Status) string {
+		return `<span class="` + cls(st) + `" title="` + word(st) + `">` + glyph(st) + `</span> <a href=`
+	}
+	for _, want := range []string{
+		status(event.Running) + `"/executions/6?combination=a-net&view=tree">a-net</a>`,
+		`<td class="c ` + cls(event.Running) + `" title="smoke: ` + word(event.Running) + `">` + glyph(event.Running) + `</td>`,
+		// The execution started four hours ago, and so did a-net.
+		`<td class="mono">4h00</td>`,
+		`<a href="/executions/6?node=a-net%00smoke%00deploy%00capt.cluster.create">smoke › deploy › capt.cluster.create</a>`,
+		status(event.Waiting) + `"/executions/6?combination=b-iso&view=tree">b-iso</a>`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the grid lacks %s", want)
+		}
+	}
+	if n := strings.Count(page, `<td class="mono"></td>`); n != 3 {
+		t.Errorf("%d combinations show no time, want the 3 waiting ones", n)
+	}
+}
+
+var (
+	pickedCombination = regexp.MustCompile(`<details id="combination-picker" class="dropdown">\s*<summary class="btn sm"><span [^>]*>[^<]*</span> ([^<]+)</summary>`)
+	pickerEntry       = regexp.MustCompile(`<a href="/executions/\d+\?combination=([^&"]+)&view=tree"(?: class="([^"]*)")?><span class="[^"]*" title="([^"]+)">`)
+)
+
+// treeOf is the tree's rows on an execution's page.
+func treeOf(page string) string {
+	_, tree, _ := strings.Cut(page, `class="card tree"`)
+	tree, _, _ = strings.Cut(tree, `id="follow"`)
+	return tree
+}
+
+// The tree shows one combination: the one the URL names, else the one that
+// most needs looking at. A dropdown lists them all with their statuses.
+func TestTreeShowsOneCombination(t *testing.T) {
+	s, svc := fixtureServer(t)
+	passed := func(c *engine.CombinationSummary) { c.Status = event.Passed }
+	running := func(c *engine.CombinationSummary) { c.Status = event.Running }
+	waiting := func(c *engine.CombinationSummary) { c.Status = event.Waiting }
+	failed := func(c *engine.CombinationSummary) {
+		c.Status, c.Failure = event.Failed, &engine.Failure{Path: []string{"smoke", "nodes"}, Status: event.Failed}
+	}
+	paused := func(c *engine.CombinationSummary) { failed(c); c.Status, c.Paused = event.Paused, true }
+	// Each of nightly's combinations in turn: a-net, a-iso, b-net, b-iso.
+	add := func(id string, status event.Status, each ...func(*engine.CombinationSummary)) {
+		addExecution(t, svc, id, preview.Selection{Plan: "nightly"}, status, func(i int, c *engine.CombinationSummary, _ *preview.Combination, _ string) {
+			each[i](c)
+		})
+	}
+	add("6", event.Running, passed, failed, running, paused)
+	add("7", event.Running, passed, failed, running, waiting)
+	add("8", event.Failed, passed, failed, passed, passed)
+	add("9", event.Passed, passed, passed, passed, passed)
+
+	setup := func(c string) string { return url.QueryEscape(c + "\x00setup") }
+	for path, want := range map[string]string{
+		"/executions/6?view=tree":                                "b-iso",
+		"/executions/7?view=tree":                                "b-net",
+		"/executions/8?view=tree":                                "a-iso",
+		"/executions/9?view=tree":                                "a-net",
+		"/executions/6?view=tree&combination=a-net":              "a-net",
+		"/executions/6?view=tree&combination=nope":               "b-iso",
+		"/executions/6?node=" + setup("a-iso"):                   "a-iso",
+		"/executions/6?combination=b-net&node=" + setup("a-iso"): "b-net",
+	} {
+		page := shownPage(t, s, path)
+		if m := pickedCombination.FindStringSubmatch(page); m == nil || m[1] != want {
+			t.Errorf("%s shows %v, want %s", path, m, want)
+			continue
+		}
+		tree := treeOf(page)
+		for _, c := range []string{"a-net", "a-iso", "b-net", "b-iso"} {
+			if has := strings.Contains(tree, "node="+c+"%00"); has != (c == want) {
+				t.Errorf("%s: the tree has %s's rows: %v", path, c, has)
+			}
+		}
+		if strings.Contains(tree, "node="+want+`%00"`) {
+			t.Errorf("%s: the tree has a row for the combination itself", path)
+		}
+	}
+	if tree := treeOf(shownPage(t, s, "/executions/6?node="+setup("a-iso"))); !strings.Contains(tree, "node="+setup("a-iso")+`" class="sel"`) {
+		t.Error("the row ?node= names is not picked")
+	}
+
+	page := shownPage(t, s, "/executions/6?view=tree&combination=b-net")
+	var entries []string
+	for _, m := range pickerEntry.FindAllStringSubmatch(page, -1) {
+		entries = append(entries, strings.TrimSpace(m[1]+" "+m[3]+" "+m[2]))
+	}
+	if want := []string{
+		"a-net " + word(event.Passed), "a-iso " + word(event.Failed), "b-net " + word(event.Running) + " on", "b-iso " + word(event.Paused),
+	}; !slices.Equal(entries, want) {
+		t.Errorf("the dropdown lists %q, want %q", entries, want)
+	}
+	tree := treeOf(page)
+	for _, want := range []string{"<span>Set up testbed</span>", "<span>suite smoke</span>"} {
+		if !strings.Contains(tree, want) {
+			t.Errorf("the tree lacks %s", want)
+		}
+	}
+	if strings.Contains(tree, "steps)") {
+		t.Error("Set up testbed still counts its steps")
+	}
+
+	page = shownPage(t, s, "/executions/1")
+	if strings.Contains(page, "combination-picker") {
+		t.Error("a single combination has a dropdown")
+	}
+	if tree := treeOf(page); !strings.Contains(tree, "node="+setup("quickstart")) || strings.Contains(tree, `node=quickstart%00"`) {
+		t.Error("a single combination's tree should show its rows and no row for itself")
+	}
+}
+
+// Following stays in the combination the URL names, even while another
+// started a step more recently.
+func TestFollowStaysInTheNamedCombination(t *testing.T) {
+	s, svc := fixtureServer(t)
+	addExecution(t, svc, "6", preview.Selection{Plan: "nightly"}, event.Running, func(i int, c *engine.CombinationSummary, _ *preview.Combination, _ string) {
+		if i > 1 {
+			c.Status = event.Waiting
+		}
+	})
+	stream, err := event.Create(filepath.Join(svc.ExecutionDir("6"), "events.jsonl"), "6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := []string{"smoke", "deploy", "capt.cluster.create"}
+	stream.Emit(event.Event{Type: event.StepStarted, Combination: "a-iso", Path: step, Status: event.Running, TS: time.Now().Add(-2 * time.Minute)})
+	stream.Emit(event.Event{Type: event.StepStarted, Combination: "a-net", Path: step, Status: event.Running, TS: time.Now().Add(-time.Minute)})
+	_ = stream.Close()
+
+	page := shownPage(t, s, "/executions/6?view=tree&combination=a-iso")
+	if !strings.Contains(treeOf(page), "node=a-iso%00smoke%00deploy%00capt.cluster.create\" class=\"sel\"") {
+		t.Error("Follow left a-iso for the step a-net started later")
+	}
+	if !strings.Contains(page, "☑ Follow the running step") {
+		t.Error("the page is not following")
+	}
+}
+
+// An execution's page says what it ran with, defaults marked, and Change and
+// run… opens the run form filled in with it.
+func TestExecutionSettings(t *testing.T) {
+	s, svc := fixtureServer(t)
+	unsaved := shownPage(t, s, "/executions/3")
+	for _, want := range []string{
+		`<details id="settings" class="adv" style="margin:0 0 14px" hx-preserve><summary>Settings</summary>`,
+		`<th>Plan</th><td><span class="mute">Unsaved plan: run from a form</span>`,
+		`<th>Testbed</th><td><a href="/testbeds/testbeds/big">big</a>`,
+		`<th>Combinations</th><td><span class="mute">All (default)</span>`,
+		`<th>Suites</th><td> <a href="/suites/suites/smoke">smoke</a>`,
+		`<th>Only tests with labels</th><td><span class="mute">Every test (default)</span>`,
+		`<th>When it finishes</th><td><span class="mute">Tear down the testbed (default)</span>`,
+		`<th>When a step fails</th><td><span class="mute">Stop (default)</span>`,
+		`<th>Machine consoles</th><td><span class="mute">Recorded (default)</span>`,
+	} {
+		if !strings.Contains(unsaved, want) {
+			t.Errorf("#3's settings lack %s", want)
+		}
+	}
+
+	nightly := shownPage(t, s, "/executions/2")
+	for _, want := range []string{
+		`<th>Plan</th><td><a href="/plans/nightly">nightly</a>`,
+		`<th>Testbed</th><td><a href="/testbeds/testbeds/m">m</a>`,
+		`<th>When it finishes</th><td><span style="white-space:pre-wrap">Keep the testbed if something fails</span>`,
+	} {
+		if !strings.Contains(nightly, want) {
+			t.Errorf("#2's settings lack %s", want)
+		}
+	}
+
+	// Change and run… previews what the execution ran.
+	m := changeAndRun.FindStringSubmatch(nightly)
+	if m == nil {
+		t.Fatal("#2 has no Change and run…")
+	}
+	run := shownPage(t, s, m[1])
+	ran, err := preview.New(svc.Catalog(), preview.Selection{Plan: "nightly"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`<option value="nightly" selected>nightly</option>`, `<option value="m" selected>m</option>`,
+		`name="suites" value="smoke" checked`, `<input type="radio" name="keep" value="failed" checked>`,
+		`<input type="radio" name="pauseOnFailure" value="false" checked>`, "<b>" + previewHeadline(ran) + "</b>",
+	} {
+		if !strings.Contains(run, want) {
+			t.Errorf("Change and run… lacks %s", want)
+		}
+	}
+	if strings.Contains(run, `<p class="fail"`) {
+		t.Error("Change and run… previews a problem")
+	}
+
+	// An execution recorded before executions kept their settings shows them
+	// from its selection when it ran an unsaved plan, and names only the
+	// plan otherwise.
+	for _, id := range []string{"1", "3"} {
+		dir := svc.ExecutionDir(id)
+		sum, err := engine.ReadSummary(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum.Effective = preview.Selection{}
+		if err := engine.WriteSummary(dir, sum); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if old := shownPage(t, s, "/executions/3"); !strings.Contains(old, `<th>When it finishes</th><td><span class="mute">Tear down the testbed (default)</span>`) {
+		t.Error("an older unsaved execution does not show its settings")
+	}
+	old := shownPage(t, s, "/executions/1")
+	if !strings.Contains(old, "recorded before Wendy kept an execution's settings") || !strings.Contains(old, `<a class="btn" href="/run/quickstart">Change and run…</a>`) {
+		t.Error("an older plan execution does not say its settings weren't recorded, or offer its plan")
+	}
+}
+
 func TestExecutionKeptTestbedCard(t *testing.T) {
 	s, _ := fixtureServer(t)
 	page := shownPage(t, s, "/executions/4")
@@ -173,14 +455,35 @@ func TestExecutionKeptTestbedCard(t *testing.T) {
 	}
 	for _, want := range []string{
 		`<span class="chip pass">✓ passed</span>`,
-		"<th>Machines</th>", "cp-1 control-plane 172.20.0.11", "Redfish 172.20.0.2:8000", "wendy-pt4 · 172.20.0.0/24",
-		">Copy export KUBECONFIG</button>",
-		`href="/executions/4/files/quickstart/kubeconfigs/management" download>management cluster kubeconfig</a>`,
-		`href="/executions/4/files/quickstart/kubeconfigs/workload" download>workload cluster kubeconfig</a>`,
+		// Each part is a row, and each value says what it is.
+		`<tr><th>Tinkerbell</th><td><div class="facts"><span><span class="mute">Address</span> <span class="mono">172.20.0.100</span></span>`,
+		`<tr><th>Workload cluster</th><td><div class="facts"><span><span class="mute">Kubernetes</span> <span class="mono">v1.36.4</span></span>`,
+		`<th scope="col">Name</th><th scope="col">Role</th><th scope="col">IP address</th></tr><tr><td class="mono">cp-1</td><td>Control plane</td><td class="mono">172.20.0.11</td></tr>`,
+		`<span class="mute">Protocol</span> <span>Redfish</span></span> <span><span class="mute">Address</span> <span class="mono">172.20.0.2:8000</span>`,
+		`<span class="mute">Name</span> <span class="mono">wendy-pt4</span></span> <span><span class="mute">IPv4</span> <span class="mono">172.20.0.0/24</span>`,
 		`hx-post="/api/executions/4/quickstart/teardown" hx-confirm="Tear down 4/quickstart? This deletes its clusters, VMs and network.">Tear down…</button>`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("the kept testbed card lacks %s", want)
+		}
+	}
+	if strings.Contains(page, `<span class="mono">/`) || strings.Contains(page, `<div class="facts"></div>`) {
+		t.Error("the card shows a kubeconfig's path, or an empty row of facts")
+	}
+	if strings.Contains(page, "Copy export KUBECONFIG (management cluster)") {
+		t.Error("the node pane repeats the open card's kubeconfig buttons")
+	}
+	// Each cluster's row copies and downloads that cluster's kubeconfig, and
+	// the buttons' names say which cluster.
+	for _, c := range []string{"management", "workload"} {
+		line := regexp.MustCompile(`<tr><th>` + capital(c) + ` cluster</th>.*?</tr>`).FindString(page)
+		for _, want := range []string{
+			`/quickstart/kubeconfigs/` + c + `" aria-label="Copy export KUBECONFIG for the ` + c + ` cluster">Copy export KUBECONFIG</button>`,
+			`href="/executions/4/files/quickstart/kubeconfigs/` + c + `" download aria-label="Download kubeconfig of the ` + c + ` cluster">Download kubeconfig</a>`,
+		} {
+			if !strings.Contains(line, want) {
+				t.Errorf("the %s cluster's row %q lacks %s", c, line, want)
+			}
 		}
 	}
 	if open, _ := keptCards(shownPage(t, s, "/executions/5")); !slices.Equal(open, []string{"5/a-net"}) {
@@ -223,7 +526,7 @@ func TestExecutionFoldsOtherKeptTestbeds(t *testing.T) {
 	check("/executions/6?combination=nope", first, second, "/executions/6?combination="+second+"&view=grid")
 
 	// Picking a combination in the grid opens its card.
-	link := regexp.MustCompile(`<td>\s*<a href="([^"]*)">` + regexp.QuoteMeta(second) + `</a>\s*</td>`).FindStringSubmatch(shownPage(t, s, "/executions/6"))
+	link := regexp.MustCompile(`<td>\s*<span [^>]*>[^<]*</span>\s*<a href="([^"]*)">` + regexp.QuoteMeta(second) + `</a>\s*</td>`).FindStringSubmatch(shownPage(t, s, "/executions/6"))
 	if link == nil {
 		t.Fatal("the grid does not link the second combination")
 	}

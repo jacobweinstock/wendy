@@ -152,6 +152,36 @@ func TestBuildsDeduplicated(t *testing.T) {
 	}
 }
 
+// Effective is everything an execution runs with, so its page can show it: a
+// plan's settings under the selection's own, and every default filled in.
+func TestEffectiveSelection(t *testing.T) {
+	cat := catalog(t)
+	pause := true
+	p, err := New(cat, Selection{Plan: "p", LabelFilter: "!health", PauseOnFailure: &pause})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := p.Effective
+	if e.Plan != "p" || e.Testbed != "m" || strings.Join(e.Combinations, " ") != "ipv4-* ipv6-isoboot" || strings.Join(e.Suites, " ") != "t" ||
+		e.LabelFilter != "!health" || e.Parallel != 2 || e.Keep != "never" || !*e.PauseOnFailure || *e.Diagnostics != config.DefaultDiagnostics() {
+		t.Errorf("effective = %+v", e)
+	}
+
+	bare, err := New(cat, Selection{Testbed: "default"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := bare.Effective; strings.Join(b.Suites, " ") != "smoke" || b.Parallel != 1 || b.Keep != "never" || *b.PauseOnFailure || b.Plan != "" {
+		t.Errorf("a bare testbed's effective = %+v", b)
+	}
+	if n := Normalize(bare.Selection); n.Keep != bare.Effective.Keep || n.Parallel != 1 || *n.PauseOnFailure || n.Diagnostics == nil {
+		t.Errorf("Normalize(%+v) = %+v", bare.Selection, n)
+	}
+	if setup := Normalize(Selection{Testbed: "default", SetupOnly: true}); setup.Suites != nil {
+		t.Errorf("setting up only runs suites %v", setup.Suites)
+	}
+}
+
 // Diagnostics are an execution's setting, so a plan decides them for every
 // combination and a testbed without a plan gets the defaults.
 func TestDiagnosticsComeFromThePlan(t *testing.T) {

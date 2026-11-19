@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -271,7 +272,7 @@ func paused(s *engine.Summary) bool {
 }
 
 // waiting reports whether an execution is paused on a failure, waiting for
-// someone to retry, continue or abort.
+// someone to retry the step, carry on or stop.
 func waiting(s *engine.Summary) bool {
 	return s.Status == event.Paused || (paused(s) && !s.Status.Done())
 }
@@ -309,8 +310,18 @@ func (s *Server) eta(sum *engine.Summary) string {
 	return ""
 }
 
-func exportLine(dir string) string {
-	return "export KUBECONFIG=" + filepath.Join(dir, "kubeconfigs", engine.ManagementCluster)
+// clusterAccess is how to reach one of a testbed's clusters from a shell: the
+// line that points kubectl at its kubeconfig, and the kubeconfig to download.
+type clusterAccess struct {
+	// Cluster is engine.ManagementCluster or engine.WorkloadCluster.
+	Cluster  string
+	Export   string
+	Download templ.SafeURL
+}
+
+// exportLine points kubectl at one of the clusters of the testbed in dir.
+func exportLine(dir, cluster string) string {
+	return "export KUBECONFIG=" + filepath.Join(dir, "kubeconfigs", cluster)
 }
 
 // Home.
@@ -331,7 +342,7 @@ type runningExecution struct {
 }
 
 // waitingExecution is an execution paused after a failure, waiting for
-// someone to retry, continue or abort: Home's banner.
+// someone to retry the step, carry on or stop: Home's banner.
 type waitingExecution struct {
 	Sum         *engine.Summary
 	Combination string
@@ -487,7 +498,7 @@ func (s *Server) executionsPage(w http.ResponseWriter, r *http.Request) {
 // executionRowOf is how the list shows sum: its plan, and its testbed, which
 // is the selection's or else its plan's.
 func executionRowOf(cat *config.Catalog, sum *engine.Summary) executionRow {
-	row := executionRow{Sum: sum, Plan: sum.Selection.Plan, Testbed: sum.Selection.Testbed}
+	row := executionRow{Sum: sum, Plan: sum.Selection.Plan, Testbed: cmp(sum.Effective.Testbed, sum.Selection.Testbed)}
 	if p, ok := cat.Plans[row.Plan]; ok {
 		row.PlanURL = entryURL(config.KindPlan, row.Plan)
 		row.Testbed = cmp(row.Testbed, p.Value.Testbed)
@@ -496,6 +507,83 @@ func executionRowOf(cat *config.Catalog, sum *engine.Summary) executionRow {
 		row.TestbedURL = entryURL(config.KindTestbed, row.Testbed)
 	}
 	return row
+}
+
+// executionSettings are what an execution ran with, for its page's Settings.
+type executionSettings struct {
+	// Known is false for an execution of a plan recorded before executions
+	// kept their settings; only the plan is known.
+	Known bool
+	Sel   preview.Selection
+	// Suites link to the suites that still exist.
+	Suites []link
+	// Rows are the options, each marked when it is the default.
+	Rows []kvRow
+	// ChangeURL is the run form filled in with these settings.
+	ChangeURL templ.SafeURL
+}
+
+// settingsOf is what an execution ran with. One recorded before executions
+// kept their settings has only its selection, which is complete for an
+// unsaved plan, and names only the plan otherwise.
+func settingsOf(cat *config.Catalog, sum *engine.Summary) executionSettings {
+	st := executionSettings{Sel: sum.Effective, Known: true}
+	switch {
+	case sum.Effective.Testbed != "":
+	case sum.Selection.Plan == "":
+		st.Sel = preview.Normalize(sum.Selection)
+	default:
+		st.Sel, st.Known = preview.Selection{Plan: sum.Selection.Plan}, false
+		if _, ok := cat.Plans[sum.Selection.Plan]; ok {
+			st.ChangeURL = runTestsURL(sum.Selection.Plan, nil)
+		}
+		return st
+	}
+	s := st.Sel
+	for _, n := range s.Suites {
+		l := link{Label: n}
+		if _, ok := cat.Suites[n]; ok {
+			l.Href = entryURL(config.KindSuite, n)
+		}
+		st.Suites = append(st.Suites, l)
+	}
+	diag := config.DefaultDiagnostics()
+	consoles := map[bool]string{true: "Recorded", false: "Not recorded"}
+	st.Rows = []kvRow{
+		{Label: "Combinations at once", Value: strconv.Itoa(s.Parallel), Default: s.Parallel == 1},
+		{Label: "When it finishes", Value: vocab.Choice("keep", s.Keep), Default: s.Keep == "never"},
+		{Label: "When a step fails", Value: vocab.Choice("pauseOnFailure", strconv.FormatBool(*s.PauseOnFailure)), Default: !*s.PauseOnFailure},
+		{Label: "Collect diagnostics", Value: vocab.Choice("diagnostics", s.Diagnostics.Collect), Default: s.Diagnostics.Collect == diag.Collect},
+		{Label: "Machine consoles", Value: consoles[s.Diagnostics.Consoles], Default: s.Diagnostics.Consoles == diag.Consoles},
+	}
+	st.ChangeURL = changeAndRunURL(cat, s)
+	return st
+}
+
+// changeAndRunURL is the run form filled in with s, in the fields the form
+// itself posts. A plan that no longer exists is left out, so the form starts
+// blank rather than fail to preview.
+func changeAndRunURL(cat *config.Catalog, s preview.Selection) templ.SafeURL {
+	q := url.Values{
+		"testbed": {s.Testbed}, "suites": s.Suites, "suitesSet": {"1"}, "keep": {s.Keep},
+		"pauseSet": {"1"}, "pauseOnFailure": {strconv.FormatBool(*s.PauseOnFailure)},
+		"diagnosticsSet": {"1"}, "diagnostics": {s.Diagnostics.Collect}, "consoles": {strconv.FormatBool(s.Diagnostics.Consoles)},
+	}
+	if _, ok := cat.Plans[s.Plan]; ok {
+		q.Set("plan", s.Plan)
+	}
+	// The form posts parallel only for a testbed with a matrix, so it is left
+	// out at its default, and the preview is of what Run then posts.
+	if s.Parallel > 1 {
+		q.Set("parallel", strconv.Itoa(s.Parallel))
+	}
+	if s.LabelFilter != "" {
+		q.Set("labelFilter", s.LabelFilter)
+	}
+	if len(s.Combinations) > 0 {
+		q.Set("combinations", strings.Join(s.Combinations, " "))
+	}
+	return runTestsURL("", q)
 }
 
 // matches reports whether the row passes the list's filter: "#41" matches
@@ -531,6 +619,7 @@ type executionData struct {
 	Sum               *engine.Summary
 	View              *ui.ExecutionView
 	Row               executionRow
+	Settings          executionSettings
 	Self              string
 	Rows              []ui.Row
 	Sel               *ui.Node
@@ -540,32 +629,38 @@ type executionData struct {
 	Failure           *engine.Failure
 	FailedCombination string
 	Paused            bool
+	// Shown is the combination the tree shows.
+	Shown string
 	// Kept are the execution's kept or paused testbeds. InView is the
-	// combination whose card is open, and Combination the one the URL named.
+	// combination whose card is open, and Combination the one the URL named,
+	// if it names one.
 	Kept        []service.KeptTestbed
 	InView      string
 	Combination string
-	Export      string
-	Kubeconfig  templ.SafeURL
-	Consoles    []link
-	Logs        string
-	Live        bool
-	ETA         string
-	Report      bool
-	Failed      int
+	// Clusters are how to reach the shown combination's clusters while its
+	// testbed is up.
+	Clusters []clusterAccess
+	Consoles []link
+	Logs     string
+	Live     bool
+	ETA      string
+	Report   bool
+	Failed   int
 }
 
-func (d executionData) nodeURL(key string) templ.SafeURL {
-	return executionURL(d.Sum.ID) + templ.SafeURL("?node="+url.QueryEscape(key))
-}
-
-func (d executionData) combinationURL(name string) templ.SafeURL {
-	for _, n := range d.View.Root {
-		if n.Kind == ui.KindCombination && n.Name == name {
-			return d.nodeURL(n.Key)
-		}
+// nodeURL picks a row in the tree. It keeps the combination the URL named
+// when the row is in that combination's tree, so Follow stays in it.
+func (d executionData) nodeURL(n *ui.Node) templ.SafeURL {
+	q := url.Values{"node": {n.Key}}
+	if d.Combination != "" && (n.Combination == "" || n.Combination == d.Combination) {
+		q.Set("combination", d.Combination)
 	}
-	return executionURL(d.Sum.ID)
+	return executionURL(d.Sum.ID) + templ.SafeURL("?"+q.Encode())
+}
+
+// pickURL shows a combination's tree.
+func (d executionData) pickURL(name string) templ.SafeURL {
+	return d.pageURL("tree", name)
 }
 
 // viewURL shows the execution as a grid or a tree, keeping the kept testbed
@@ -607,18 +702,96 @@ func keptInView(kept []service.KeptTestbed, names ...string) string {
 	return ""
 }
 
-// showKept shows an execution's kept testbeds. The card open is the one named
-// (by the URL), else the picked node's, else the failed combination's.
-func (d *executionData) showKept(kept []service.KeptTestbed, named string) {
+// showKept shows an execution's kept testbeds. The card open is the one the
+// URL names, else the picked node's, else the failed combination's.
+func (d *executionData) showKept(kept []service.KeptTestbed) {
 	d.Kept = kept
-	if keptInView(kept, named) == named {
-		d.Combination = named
-	}
 	picked := ""
 	if !d.Follow && d.Sel != nil {
 		picked = d.Sel.Combination
 	}
 	d.InView = keptInView(kept, d.Combination, picked, d.FailedCombination)
+}
+
+// summaryOf is the summary of the execution's combination called name.
+func (d executionData) summaryOf(name string) (engine.CombinationSummary, bool) {
+	for _, c := range d.Sum.Combinations {
+		if c.Name == name {
+			return c, true
+		}
+	}
+	return engine.CombinationSummary{}, false
+}
+
+// shownCombination is the combination the tree shows: the one the URL names,
+// else the one node is in, else one waiting for a decision, else the first
+// running, else the failed one, else the first.
+func (d executionData) shownCombination(named, node string) string {
+	if _, ok := d.summaryOf(named); ok {
+		return named
+	}
+	if n := d.View.ByKey[node]; n != nil && n.Combination != "" {
+		return n.Combination
+	}
+	for _, st := range []event.Status{event.Paused, event.Running} {
+		for _, c := range d.Sum.Combinations {
+			if ui.CombinationStatus(c) == st {
+				return c.Name
+			}
+		}
+	}
+	if d.FailedCombination != "" {
+		return d.FailedCombination
+	}
+	if len(d.Sum.Combinations) > 0 {
+		return d.Sum.Combinations[0].Name
+	}
+	return ""
+}
+
+// shownStatus is the status of the combination the tree shows.
+func (d executionData) shownStatus() event.Status {
+	c, _ := d.summaryOf(d.Shown)
+	return ui.CombinationStatus(c)
+}
+
+// follow is the row Follow picks in the shown combination's tree: the step
+// it is on, else the shared build's while that runs, else where it failed,
+// else its last row.
+func (d executionData) follow() string {
+	c, ok := d.summaryOf(d.Shown)
+	if ok {
+		if n := d.View.Now(c); n != nil {
+			return n.Key
+		}
+	}
+	if n := d.View.ByKey[d.View.Running]; n != nil && n.Combination == "" {
+		return n.Key
+	}
+	if ok && c.Failure != nil {
+		for k, n := range d.View.ByKey {
+			if n.Combination == c.Name && slices.Equal(n.Path, c.Failure.Path) {
+				return k
+			}
+		}
+	}
+	if len(d.Rows) > 0 {
+		return d.Rows[len(d.Rows)-1].Key
+	}
+	return ""
+}
+
+// treeLabel is a tree row's name. Set up testbed needs no count of its
+// steps, which show under it, and a suite says it is one.
+func treeLabel(n *ui.Node) string {
+	if n.Kind != ui.KindSuite || n.Reused {
+		return n.Label()
+	}
+	switch n.Name {
+	case engine.PhaseSetup, engine.PhaseTeardown, engine.PhaseDiagnostics, engine.PhaseAdhoc:
+		return vocab.Phase(n.Name)
+	}
+	return "suite " + n.Name
 }
 
 func (d executionData) eventsURL() string {
@@ -629,18 +802,22 @@ func (d executionData) file(rel string) templ.SafeURL {
 	return executionFileURL(d.Sum.ID, rel)
 }
 
-func (d executionData) action(a string) string {
-	return decisionAPI(d.Sum.ID, d.FailedCombination, a)
+// stopConfirm is what stopping a paused combination asks first: whether its
+// testbed is then kept, as When it finishes says, or torn down.
+func stopConfirm(sum *engine.Summary) string {
+	if ui.StopKeeps(sum) {
+		return "Stop #" + sum.ID + "? Its testbed is kept so you can look around; tear it down when you're done."
+	}
+	return "Stop #" + sum.ID + " and tear down its testbed? This deletes its clusters, VMs and network."
 }
 
-func (d executionData) cell(c engine.CombinationSummary, col string) event.Status {
-	if st, ok := c.Nodes[col]; ok {
-		return st
+// now is the step a combination's row names: the one it is running, or the
+// one it paused at. A failure it didn't pause at takes the row instead.
+func (d executionData) now(c engine.CombinationSummary) *ui.Node {
+	if c.Failure != nil && !c.Paused {
+		return nil
 	}
-	if c.Status.Done() {
-		return event.Skipped
-	}
-	return event.Waiting
+	return d.View.Now(c)
 }
 
 func colName(c string) string { return vocab.Phase(c) }
@@ -648,7 +825,12 @@ func colName(c string) string { return vocab.Phase(c) }
 // diagnosticKinds are the files collecting diagnostics finds, in the order the
 // failure card links them, with their labels.
 var diagnosticKinds = []struct{ Kind, Label string }{
-	{"workflow", "Workflow"}, {"console", "Console"}, {"bmc", "BMC log"}, {"dump", "Cluster dump"},
+	{"workflow", "Workflow"}, {"logs", "Tinkerbell logs"}, {"console", "Console"}, {"bmc", "BMC log"},
+	{"dump." + engine.ManagementCluster, "Management cluster dump"},
+	{"dump." + engine.TinkerbellCluster, "Tinkerbell cluster dump"},
+	{"dump." + engine.WorkloadCluster, "Workload cluster dump"},
+	// Executions from before dumps were per cluster.
+	{"dump", "Cluster dump"},
 }
 
 // diagnostics are the failure's diagnostics as links: the known kinds first,
@@ -704,6 +886,7 @@ func (s *Server) executionPage(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	d := executionData{Sum: sum, View: v, Live: !sum.Status.Done(), Self: s.layout(r, "", "").Self}
 	d.Row = executionRowOf(s.svc.Catalog(), sum)
+	d.Settings = settingsOf(s.svc.Catalog(), sum)
 	d.Grid = q.Get("view") == "grid" || (q.Get("view") == "" && q.Get("node") == "" && len(sum.Combinations) > 1)
 	for _, c := range sum.Combinations {
 		if c.Failure != nil && (d.Failure == nil || c.Paused) {
@@ -716,44 +899,34 @@ func (s *Server) executionPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	key := q.Get("node")
+	if _, ok := d.summaryOf(q.Get("combination")); ok {
+		d.Combination = q.Get("combination")
+	}
+	d.Shown = d.shownCombination(d.Combination, key)
+	d.Rows = v.Tree(d.Shown)
+	// A row the tree doesn't show can't be the one picked.
+	if n := v.ByKey[key]; n == nil || (n.Combination != "" && n.Combination != d.Shown) {
+		key = ""
+	}
 	d.Follow = key == ""
 	if d.Follow {
-		switch {
-		case v.Running != "":
-			key = v.Running
-		case d.Failure != nil:
-			for k, n := range v.ByKey {
-				if n.Combination == d.FailedCombination && slices.Equal(n.Path, d.Failure.Path) {
-					key = k
-				}
-			}
-		case len(v.Root) > 0:
-			key = v.Root[len(v.Root)-1].Key
-		}
+		key = d.follow()
 	}
-	expanded := map[string]bool{}
-	if n := v.ByKey[key]; n != nil {
-		d.Sel = n
-		for p := n; p != nil; p = p.Parent() {
-			expanded[p.Key] = true
-		}
-	}
-	d.Rows = v.Rows(expanded)
-	d.showKept(s.svc.KeptTestbedsOf(sum), q.Get("combination"))
+	d.Sel = v.ByKey[key]
+	d.showKept(s.svc.KeptTestbedsOf(sum))
 
-	combinationDir := ""
-	for _, c := range sum.Combinations {
-		if combinationDir == "" || (d.Sel != nil && c.Name == d.Sel.Combination) || (d.Sel == nil && c.Name == d.FailedCombination) {
-			combinationDir = c.Dir
-		}
+	combination, combinationDir := "", ""
+	if c, ok := d.summaryOf(d.Shown); ok {
+		combination, combinationDir = c.Name, c.Dir
 	}
 	if combinationDir != "" {
-		d.combinationFiles(executionDir, combinationDir, d.Live || kept(sum))
+		// An open kept testbed card already offers its clusters' kubeconfigs.
+		d.combinationFiles(executionDir, combinationDir, (d.Live || kept(sum)) && d.InView != combination)
 	}
 	if d.Sel != nil {
 		d.Logs = logText(d.Sel)
 	}
-	d.Cols = gridColumns(sum, v)
+	d.Cols = gridColumns(v)
 	if d.Live {
 		d.ETA = s.eta(sum)
 	}
@@ -772,15 +945,17 @@ func (s *Server) executionPage(w http.ResponseWriter, r *http.Request) {
 	render(w, r, executionPage(l, d))
 }
 
-// combinationFiles links a combination's consoles and, while its testbed is
-// up, how to reach its clusters.
-func (d *executionData) combinationFiles(executionDir, combinationDir string, testbedUp bool) {
+// combinationFiles links a combination's consoles and, with reach, how to
+// reach its clusters.
+func (d *executionData) combinationFiles(executionDir, combinationDir string, reach bool) {
 	// Service.ExecutionDir keeps executionDir inside the executions directory.
 	dir := filepath.Join(executionDir, combinationDir)
-	if testbedUp {
-		d.Export = exportLine(dir)
-		if _, err := os.Stat(filepath.Join(dir, "kubeconfigs", engine.ManagementCluster)); err == nil { //nolint:gosec // G703: see above.
-			d.Kubeconfig = d.file(filepath.Join(combinationDir, "kubeconfigs", engine.ManagementCluster))
+	if reach {
+		for _, c := range []string{engine.ManagementCluster, engine.TinkerbellCluster, engine.WorkloadCluster} {
+			kubeconfig := filepath.Join("kubeconfigs", c)
+			if _, err := os.Stat(filepath.Join(dir, kubeconfig)); err == nil { //nolint:gosec // G703: see above.
+				d.Clusters = append(d.Clusters, clusterAccess{Cluster: c, Export: exportLine(dir, c), Download: d.file(filepath.Join(combinationDir, kubeconfig))})
+			}
 		}
 	}
 	files, _ := filepath.Glob(filepath.Join(dir, "consoles", "*.log"))
@@ -813,9 +988,9 @@ func logText(n *ui.Node) string {
 
 // gridColumns are the grid's columns: build when anything is built, setup,
 // then every suite in the order the combinations run them.
-func gridColumns(sum *engine.Summary, v *ui.ExecutionView) []string {
+func gridColumns(v *ui.ExecutionView) []string {
 	var cols []string
-	if len(sum.Builds) > 0 {
+	if len(v.Root) > 0 && v.Root[0].Kind == ui.KindBuild {
 		cols = append(cols, engine.PhaseBuild)
 	}
 	cols = append(cols, engine.PhaseSetup)
@@ -922,7 +1097,7 @@ func (s *Server) runForm(r *http.Request, from string) runTestsData {
 		// The form re-rendering itself, e.g. after picking another testbed.
 		sel, _ = selection(r)
 		d.From = q.Get("plan")
-		d.Pause = q.Get("pauseOnFailure") == "on"
+		d.Pause = q.Get("pauseOnFailure") == "on" || q.Get("pauseOnFailure") == "true"
 	case ok:
 		pr := p.Value
 		sel = preview.Selection{
@@ -1914,62 +2089,90 @@ func kubeconfigURL(e service.KeptTestbed, cluster string) templ.SafeURL {
 	return executionFileURL(e.Execution, filepath.Join(filepath.Base(e.Dir), "kubeconfigs", cluster))
 }
 
-// keptRow is one row of a kept testbed card, with a line per thing it lists.
+// keptRow is one part of a kept testbed on its card: the facts people read
+// about it, each with a label, and for a cluster how to reach it, or for the
+// machines a table of them.
 type keptRow struct {
-	Label string
-	Lines []keptLine
+	Label    string
+	Facts    []keptFact
+	Cluster  *clusterAccess
+	Machines []keptMachine
 }
 
-// keptLine is what people read of one thing, then what they copy (shown as
-// code).
-type keptLine struct{ Text, Code string }
+// keptFact is one labelled value of a part, e.g. Version v0.26.0. A value is
+// shown as code, which people copy, unless it is Plain, a word to read.
+type keptFact struct {
+	Label, Value string
+	Plain        bool
+}
 
-// keptRows are what a kept testbed is made of, as far as its setup got.
+// fact is a labelled value shown as code.
+func fact(label, value string) keptFact { return keptFact{Label: label, Value: value} }
+
+// keptMachine is one machine of a kept testbed, as its card's table lists it.
+type keptMachine struct{ Name, Role, IP string }
+
+// keptRows are what a kept testbed is made of, as far as its setup got: one
+// row per part that has anything to show.
 func keptRows(e service.KeptTestbed) []keptRow {
 	st := e.State
+	access := map[string]*clusterAccess{}
+	for _, c := range keptAccess(e) {
+		access[c.Cluster] = &c
+	}
 	var rows []keptRow
-	add := func(label string, lines ...keptLine) {
-		if len(lines) > 0 && lines[0] != (keptLine{}) {
-			rows = append(rows, keptRow{label, lines})
+	add := func(r keptRow) {
+		var facts []keptFact
+		for _, f := range r.Facts {
+			if f.Value != "" {
+				facts = append(facts, f)
+			}
+		}
+		r.Facts = facts
+		if len(r.Facts) > 0 || r.Cluster != nil || len(r.Machines) > 0 {
+			rows = append(rows, r)
 		}
 	}
-	var clusters, versions, machines []keptLine
-	for _, k := range config.Names(st.Clusters) {
-		clusters = append(clusters, keptLine{clusterLabel(k), st.Clusters[k]})
-	}
-	for _, k := range config.Names(st.Versions) {
-		versions = append(versions, keptLine{Code: k + " " + st.Versions[k]})
-	}
+	// Tinkerbell has a cluster of its own when it runs on one, apart from
+	// the management cluster.
+	add(keptRow{Label: "Tinkerbell", Cluster: access[engine.TinkerbellCluster], Facts: []keptFact{fact("Version", st.Versions["tinkerbell"]), fact("Address", st.VIPs.Tinkerbell)}})
+	add(keptRow{Label: "Cluster API", Facts: []keptFact{fact("Cluster API", st.Versions["cluster-api"]), fact("CAPT", st.Versions["capt"])}})
+	add(keptRow{Label: "Management cluster", Cluster: access[engine.ManagementCluster]})
+	add(keptRow{Label: "Workload cluster", Cluster: access[engine.WorkloadCluster], Facts: []keptFact{
+		fact("Kubernetes", st.WorkloadCluster.KubernetesVersion), fact("API server", st.VIPs.ControlPlane),
+	}})
+	var machines []keptMachine
 	for _, m := range st.Machines {
-		machines = append(machines, keptLine{Code: strings.TrimSpace(m.Name + " " + m.Role + " " + m.IP)})
+		machines = append(machines, keptMachine{m.Name, capital(strings.ReplaceAll(m.Role, "-", " ")), m.IP})
 	}
-	add("Clusters", clusters...)
-	add("Tinkerbell", keptLine{Code: st.VIPs.Tinkerbell})
-	add("Versions", versions...)
-	add("Machines", machines...)
-	if st.BMC.Protocol != "" {
-		add("BMC", keptLine{Code: vocab.Choice("bmc.protocol", st.BMC.Protocol) + " " + st.BMC.Host})
-	}
-	if st.Network.Name != "" {
-		add("Network", keptLine{Code: networkLine(e)})
-	}
+	add(keptRow{Label: "Machines", Machines: machines})
+	add(keptRow{Label: "BMC", Facts: []keptFact{
+		{Label: "Protocol", Value: vocab.Choice("bmc.protocol", st.BMC.Protocol), Plain: true}, fact("Address", st.BMC.Host),
+	}})
+	add(keptRow{Label: "Network", Facts: []keptFact{fact("Name", st.Network.Name), fact("IPv4", st.Network.Subnet), fact("IPv6", st.Network.Subnet6)}})
 	return rows
 }
 
-// clusterLabel names one of a testbed's clusters, e.g. "workload cluster".
-func clusterLabel(cluster string) string { return cluster + " cluster" }
+// clusterLabel names one of a testbed's clusters, e.g. "workload cluster" or
+// "Tinkerbell cluster".
+func clusterLabel(cluster string) string {
+	if cluster == engine.TinkerbellCluster {
+		return "Tinkerbell cluster"
+	}
+	return cluster + " cluster"
+}
 
 // gridLegend are the statuses the grid's legend lists before it says what
 // errored means.
 var gridLegend = []event.Status{event.Passed, event.Failed, event.Running, event.Waiting, event.Skipped}
 
-// kubeconfigs are the clusters of a kept testbed that have a kubeconfig to
-// download.
-func kubeconfigs(e service.KeptTestbed) []string {
-	var out []string
+// keptAccess is how to reach each of a kept testbed's clusters whose
+// kubeconfig is there.
+func keptAccess(e service.KeptTestbed) []clusterAccess {
+	var out []clusterAccess
 	for _, k := range config.Names(e.State.Clusters) {
 		if _, err := os.Stat(filepath.Join(e.Dir, "kubeconfigs", k)); err == nil {
-			out = append(out, k)
+			out = append(out, clusterAccess{Cluster: k, Export: exportLine(e.Dir, k), Download: kubeconfigURL(e, k)})
 		}
 	}
 	return out

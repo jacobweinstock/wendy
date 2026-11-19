@@ -10,12 +10,9 @@ import (
 	"github.com/tinkerbell/wendy/internal/event"
 	"github.com/tinkerbell/wendy/internal/hostcheck"
 	"github.com/tinkerbell/wendy/internal/preview"
-	"github.com/tinkerbell/wendy/internal/service"
 	"github.com/tinkerbell/wendy/internal/ui"
 	"github.com/tinkerbell/wendy/internal/vocab"
 )
-
-var keeps = vocab.ChoiceValues("keep")
 
 // diagnosticsChoices are the choices for when to collect diagnostics, from the
 // same field the editors use.
@@ -208,18 +205,17 @@ func partSummaryOf(cat *config.Catalog, kind, name string) string {
 	return ""
 }
 
-// optionsLine is how a plan runs, in one line: "2 combinations at once ·
-// keep the testbed if it fails · always collect diagnostics".
+// optionsLine is how a plan runs, in one line, in the words of the run form's
+// choices: "2 combinations at once · keep the testbed if something fails ·
+// always collect diagnostics".
 func optionsLine(p config.Plan) string {
 	var parts []string
 	if p.Parallel > 1 {
 		parts = append(parts, fmt.Sprintf("%d combinations at once", p.Parallel))
 	}
-	parts = append(parts, map[string]string{
-		"never": "never keep the testbed", "failed": "keep the testbed if it fails", "always": "always keep the testbed",
-	}[cmp(p.Keep, "never")])
+	parts = append(parts, strings.ToLower(vocab.Choice("keep", cmp(p.Keep, "never"))))
 	if p.PauseOnFailure {
-		parts = append(parts, "pause on failure")
+		parts = append(parts, "pause and wait for me when a step fails")
 	}
 	d := p.Collects()
 	parts = append(parts, map[string]string{
@@ -227,17 +223,6 @@ func optionsLine(p config.Plan) string {
 	}[d.Collect])
 	if d.Consoles {
 		parts = append(parts, "record machine consoles")
-	}
-	return strings.Join(parts, " · ")
-}
-
-func networkLine(e service.KeptTestbed) string {
-	n := e.State.Network
-	parts := []string{n.Name}
-	for _, s := range []string{n.Subnet, n.Subnet6} {
-		if s != "" {
-			parts = append(parts, s)
-		}
 	}
 	return strings.Join(parts, " · ")
 }
