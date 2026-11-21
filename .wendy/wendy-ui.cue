@@ -14,6 +14,14 @@ wendy.#Config & {
 					}
 				}
 			}
+			"1x1-arm64": {
+				arch: "arm64"
+				machines: {
+					spare: {
+						count: 0
+					}
+				}
+			}
 			medium: {
 				machines: {
 					controlPlane: {
@@ -32,6 +40,12 @@ wendy.#Config & {
 			local: {
 				source: {
 					repo: "/home/tink/repos/tinkerbell/tinkerbell"
+				}
+			}
+			mcanevet: {
+				source: {
+					ref:  "fix/tink-controller-workflow-requeue"
+					repo: "https://github.com/mcanevet/tinkerbell"
 				}
 			}
 		}
@@ -97,8 +111,11 @@ wendy.#Config & {
 				exclude: []
 				order: ["topology", "ipFamily", "bootMode", "registry"]
 			}
-			tinkerbell:      "local"
+			tinkerbell:      "mcanevet"
 			workloadCluster: "k8s-1.35-kube-router"
+		}
+		"quickstart-arm64": {
+			hardware: "1x1-arm64"
 		}
 		"quickstart-ipv6": {
 			bootMode: "isoboot"

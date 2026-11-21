@@ -1,0 +1,285 @@
+name: Custom e2e
+run-name: "Custom e2e · ${{ inputs.suite }} · Tinkerbell ${{ inputs.tinkerbell }} · CAPT ${{ inputs.capt }} · Kubernetes ${{ inputs.kubernetes }}"
+on:
+  workflow_dispatch:
+    # The form shows inputs in this order, so related ones are kept together
+    # and each description starts with its group.
+    inputs:
+      suite:
+        description: "Suite · smoke: deploy, health checks · lifecycle: deploy, scale, upgrade Kubernetes, remediate, delete · upgrades: deploy, upgrade Tinkerbell, Cluster API and Kubernetes"
+        type: choice
+        options: [smoke, lifecycle, upgrades]
+        default: smoke
+      topology:
+        description: "Matrix · Topology: Tinkerbell in the management cluster, or in a cluster of its own. Each value picked is a combination on its own runner."
+        type: choice
+        options: [colocated, external, both]
+        default: colocated
+      ip-family:
+        description: "Matrix · IP family"
+        type: choice
+        options: [ipv4, ipv6, both]
+        default: ipv4
+      boot-mode:
+        description: "Matrix · Boot mode"
+        type: choice
+        options: [netboot, isoboot, both]
+        default: netboot
+      registry:
+        description: "Matrix · Registry: pull images directly, or through wendy's pull-through mirrors"
+        type: choice
+        options: [direct, mirror, both]
+        default: direct
+      tinkerbell:
+        description: "Tinkerbell · A chart version (latest, v0.22.0), or a build from source: @main, @<commit>, <owner>/<repo>@<branch>"
+        type: string
+        default: latest
+      capi:
+        description: "Cluster API · Core release"
+        type: string
+        default: v1.14.4
+      capt:
+        description: "Cluster API · CAPT release (v0.7.0), or a build from source: @main, @<commit>, <owner>/<repo>@<branch>"
+        type: string
+        default: v0.7.0
+      kubernetes:
+        description: "Workload cluster · Kubernetes version"
+        type: string
+        default: v1.36.4
+      cni:
+        description: "Workload cluster · CNI"
+        type: choice
+        options: [cilium, kube-router]
+        default: cilium
+      os-version:
+        description: "Workload cluster · Ubuntu version of CAPT's OS image"
+        type: string
+        default: "2404"
+      kind-node-image:
+        description: "Management cluster · kind node image. Empty uses kind's own."
+        type: string
+        default: ""
+      control-planes:
+        description: "Hardware · Control plane machines"
+        type: choice
+        options: ["1", "3"]
+        default: "1"
+      workers:
+        description: "Hardware · Worker machines"
+        type: choice
+        options: ["0", "1", "2", "3"]
+        default: "1"
+      spares:
+        description: "Hardware · Spare machines. auto is as many as the suite's tests claim."
+        type: choice
+        options: [auto, "0", "1", "2"]
+        default: auto
+      upgrade-tinkerbell-to:
+        description: "Upgrades · Tinkerbell to a chart version or a build, written as above. Empty skips the test. (upgrades)"
+        type: string
+        default: ""
+      upgrade-capi-to:
+        description: "Upgrades · Cluster API core to this release. Empty keeps it. (upgrades)"
+        type: string
+        default: ""
+      upgrade-capt-to:
+        description: "Upgrades · CAPT to a release or a build, written as above. Empty keeps it; with both empty the test skips. (upgrades)"
+        type: string
+        default: ""
+      upgrade-kubernetes-to:
+        description: "Upgrades · Kubernetes to this version. Empty skips the test. (lifecycle, upgrades)"
+        type: string
+        default: ""
+      label-filter:
+        description: "Run · Label filter over the tests, e.g. !upgrade"
+        type: string
+        default: ""
+      diagnostics:
+        description: "Run · When to collect cluster dumps, Tinkerbell objects and BMC logs"
+        type: choice
+        options: [onFailure, always, never]
+        default: onFailure
+      consoles:
+        description: "Run · Capture the machines' consoles"
+        type: boolean
+        default: true
+      runner:
+        description: "Run · The runner label each combination runs on"
+        type: string
+        default: ubuntu-latest
+      timeout-minutes:
+        description: "Run · How long one combination may take, in minutes"
+        type: number
+        default: 180
+      extra-config:
+        description: "Advanced · CUE merged over the generated config, whose parts, testbed, suite and plan are all named custom. E.g. parts: hardware: custom: machines: worker: cpus: 4"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  # The inputs become one CUE config: the values as JSON, which jq quotes, and
+  # a template that reads them. The template reuses the built-in suites and
+  # tests by reference, so it stays correct as they change.
+  compose:
+    name: Compose the config
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      config: ${{ steps.compose.outputs.config }}
+    steps:
+      - name: Compose
+        id: compose
+        env:
+          SUITE: ${{ inputs.suite }}
+          TOPOLOGY: ${{ inputs.topology }}
+          IP_FAMILY: ${{ inputs.ip-family }}
+          BOOT_MODE: ${{ inputs.boot-mode }}
+          REGISTRY: ${{ inputs.registry }}
+          TINKERBELL: ${{ inputs.tinkerbell }}
+          CAPI: ${{ inputs.capi }}
+          CAPT: ${{ inputs.capt }}
+          KUBERNETES: ${{ inputs.kubernetes }}
+          CNI: ${{ inputs.cni }}
+          OS_VERSION: ${{ inputs.os-version }}
+          KIND_NODE_IMAGE: ${{ inputs.kind-node-image }}
+          CONTROL_PLANES: ${{ inputs.control-planes }}
+          WORKERS: ${{ inputs.workers }}
+          SPARES: ${{ inputs.spares }}
+          UPGRADE_TINKERBELL_TO: ${{ inputs.upgrade-tinkerbell-to }}
+          UPGRADE_CAPI_TO: ${{ inputs.upgrade-capi-to }}
+          UPGRADE_CAPT_TO: ${{ inputs.upgrade-capt-to }}
+          UPGRADE_KUBERNETES_TO: ${{ inputs.upgrade-kubernetes-to }}
+          LABEL_FILTER: ${{ inputs.label-filter }}
+          DIAGNOSTICS: ${{ inputs.diagnostics }}
+          CONSOLES: ${{ inputs.consoles }}
+          EXTRA_CONFIG: ${{ inputs.extra-config }}
+        run: |
+          {
+            printf 'package custom\n\nimport (\n    "list"\n\n    "github.com/tinkerbell/wendy/cue/wendy"\n)\n\n'
+            printf '// _in is what the workflow was dispatched with.\n_in: '
+            jq -n '
+              def trim: sub("^\\s+"; "") | sub("\\s+$"; "");
+              # A version, or with an @ a build: @ref of the default repo,
+              # owner/repo@ref of a GitHub repo, or url@ref of any git repo.
+              def build:
+                (capture("^(?<repo>.*)@(?<ref>[^@]+)$") // error("\(.): a build is @<ref>, <owner>/<repo>@<ref> or <url>@<ref>"))
+                | {source: ({ref: .ref} + (if .repo == "" then {} elif (.repo | test("://")) then {repo: .repo} else {repo: "https://github.com/\(.repo)"} end))};
+              def tinkerbell: if test("@") then build else {chart: {version: .}} end;
+              def capt: if test("@") then build else {version: .} end;
+              def axis($values): if . == "both" then $values else [.] end;
+              def given: . != "";
+
+              ($ENV | with_entries(.value |= trim)) as $in
+              | {
+                  suite: $in.SUITE,
+                  topology: ($in.TOPOLOGY | axis(["colocated", "external"])),
+                  ipFamily: ($in.IP_FAMILY | axis(["ipv4", "ipv6"])),
+                  bootMode: ($in.BOOT_MODE | axis(["netboot", "isoboot"])),
+                  registry: ($in.REGISTRY | axis(["direct", "mirror"])),
+                  tinkerbell: ($in.TINKERBELL | tinkerbell),
+                  clusterAPI: {core: $in.CAPI, capt: ($in.CAPT | capt)},
+                  managementCluster: (if $in.KIND_NODE_IMAGE | given then {image: $in.KIND_NODE_IMAGE} else {} end),
+                  workloadCluster: {kubernetesVersion: $in.KUBERNETES, cni: $in.CNI, osVersion: $in.OS_VERSION},
+                  controlPlanes: ($in.CONTROL_PLANES | tonumber),
+                  workers: ($in.WORKERS | tonumber),
+                  spares: (if $in.SPARES == "auto" then null else ($in.SPARES | tonumber) end),
+                  targets: (
+                    (if $in.UPGRADE_TINKERBELL_TO | given then {"upgrade-tinkerbell": {to: ($in.UPGRADE_TINKERBELL_TO | tinkerbell)}} else {} end)
+                    + (if ($in.UPGRADE_CAPI_TO | given) or ($in.UPGRADE_CAPT_TO | given) then {"upgrade-cluster-api": (
+                        (if $in.UPGRADE_CAPI_TO | given then {core: $in.UPGRADE_CAPI_TO} else {} end)
+                        + (if $in.UPGRADE_CAPT_TO | given then {capt: ($in.UPGRADE_CAPT_TO | capt)} else {} end))} else {} end)
+                    + (if $in.UPGRADE_KUBERNETES_TO | given then {"upgrade-k8s": {version: $in.UPGRADE_KUBERNETES_TO}} else {} end)
+                  ),
+                  labelFilter: $in.LABEL_FILTER,
+                  diagnostics: $in.DIAGNOSTICS,
+                  consoles: ($in.CONSOLES == "true")
+                }'
+            cat <<'CUE'
+
+          wendy.#Config & {
+              parts: {
+                  tinkerbell: custom:        _in.tinkerbell
+                  clusterAPI: custom:        _in.clusterAPI
+                  managementCluster: custom: _in.managementCluster
+                  workloadCluster: custom:   _in.workloadCluster
+                  hardware: custom: machines: {
+                      controlPlane: count: _in.controlPlanes
+                      worker: count:       _in.workers
+                      spare: count:        _spares
+                  }
+              }
+
+              testbeds: custom: {
+                  description:       "The Custom e2e workflow's testbed"
+                  tinkerbell:        "custom"
+                  clusterAPI:        "custom"
+                  managementCluster: "custom"
+                  workloadCluster:   "custom"
+                  hardware:          "custom"
+                  // Combinations are named <topology>-<ipFamily>-<bootMode>-<registry>,
+                  // as capt-e2e names them.
+                  matrix: {
+                      order: ["topology", "ipFamily", "bootMode", "registry"]
+                      axes: {
+                          topology: {for v in _in.topology {(v): topology: v}}
+                          ipFamily: {for v in _in.ipFamily {(v): network: family: v}}
+                          bootMode: {for v in _in.bootMode {(v): bootMode: v}}
+                          registry: {for v in _in.registry {(v): network: mirror: enabled: v == "mirror"}}
+                      }
+                  }
+              }
+
+              // A built-in upgrade test without a target skips, and built-ins
+              // can't be changed, so each test given a target runs as a copy.
+              tests: {for name, target in _in.targets {
+                  "custom-\(name)": {
+                      description: "The built-in \(name) test, with the target the Custom e2e workflow was given."
+                      labels:      tests[name].labels
+                      requires:    tests[name].requires
+                      steps: [for i, s in tests[name].steps {[if i == 0 {s & {with: target}}, s][0]}]
+                  }
+              }}
+
+              suites: custom: {
+                  description: suites[_in.suite].description
+                  tests: [for t in suites[_in.suite].tests {[if _in.targets[t] != _|_ {"custom-\(t)"}, t][0]}]
+              }
+
+              plans: custom: {
+                  description: "The Custom e2e workflow's plan"
+                  testbed:     "custom"
+                  suites: ["custom"]
+                  labelFilter: _in.labelFilter
+                  diagnostics: _in.diagnostics
+                  consoles:    _in.consoles
+              }
+
+              // A spare no test claims only costs time to build.
+              _spares: [
+                  if _in.spares != null {_in.spares},
+                  list.Max([0, for t in suites[_in.suite].tests {tests[t].requires.spare}]),
+              ][0]
+          }
+          CUE
+            printf '\n%s\n' "$EXTRA_CONFIG"
+          } > "$RUNNER_TEMP/custom.cue"
+
+          eof="CUE_$(openssl rand -hex 16)"
+          {
+            echo "config<<$eof"
+            cat "$RUNNER_TEMP/custom.cue"
+            echo "$eof"
+          } >> "$GITHUB_OUTPUT"
+
+  e2e:
+    name: custom
+    needs: compose
+    uses: ./.github/workflows/e2e.yaml
+    with:
+      plan: custom
+      config: ${{ needs.compose.outputs.config }}
+      runner: ${{ inputs.runner }}
+      timeout-minutes: ${{ inputs.timeout-minutes }}

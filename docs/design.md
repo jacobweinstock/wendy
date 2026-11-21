@@ -753,7 +753,9 @@ Wendy grew out of the CAPT end-to-end scripts in [tinkerbell/playground](https:/
 - Engine tests use fake providers: ordering, cleanup, verdicts, timeouts.
 - Golden tests for CUE: matrix expansion, filters, presets, `vet` errors.
 - Runner contract tests with tiny fixtures.
-- Self-e2e in CI on **GitHub-hosted runners with KVM**: `smoke` on one combination per PR, and the matrix nightly.
+- Self-e2e in CI on **GitHub-hosted runners with KVM**: `smoke` on one combination per PR. On demand, the
+  16-combination `capt-e2e` matrix (`capt-e2e.yaml`) and a matrix built from a form (`custom-e2e.yaml`) run each
+  combination on its own runner, so a matrix takes as long as its slowest combination.
 
 ## 16. Milestones
 

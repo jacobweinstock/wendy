@@ -38,7 +38,8 @@ jobs:
           version: "~> v2"
           args: check
 
-  # One combination per PR; nightly.yaml runs the longer suites.
+  # One combination per PR; capt-e2e.yaml and custom-e2e.yaml run more on
+  # demand.
   smoke:
     name: Self-e2e (smoke)
     needs: validation
@@ -60,14 +61,14 @@ jobs:
         run: make build
 
       - name: Run smoke
-        run: ./bin/wendy run --profile quickstart --plain --data "$RUNNER_TEMP/wendy"
+        run: ./bin/wendy run --plan quickstart --plain --data "$RUNNER_TEMP/wendy"
 
-      # A run directory is self-contained: download it and browse it with
-      # wendy serve --data <dir>.
+      # An execution directory is self-contained: download it into
+      # <data>/executions and browse it with wendy serve --data <data>.
       - name: Upload the run
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: smoke-run
-          path: ${{ runner.temp }}/wendy/runs
+          path: ${{ runner.temp }}/wendy/executions
           if-no-files-found: ignore

@@ -263,6 +263,17 @@ wendy run --plan quickstart --plain
 `--plain` prints one line per event. The exit code is the verdict: `0` passed, `1` failed, `2`
 errored, `3` cancelled.
 
+This repository's workflows run wendy on GitHub-hosted runners with KVM. `ci.yaml` runs `quickstart` on each PR.
+Two more run on demand (Actions › Run workflow) and put each combination on its own runner, so a matrix takes as
+long as its slowest combination: `capt-e2e.yaml` runs the CAPT playground's 16 combinations, and `custom-e2e.yaml`
+builds a testbed from a form: matrix axes, Tinkerbell, Cluster API and Kubernetes versions or builds from source,
+machines, upgrade targets and diagnostics. The run's summary shows what was planned and each combination's verdict,
+and each combination's execution is an artifact.
+
+```sh
+gh workflow run custom-e2e.yaml -f suite=lifecycle -f topology=both -f tinkerbell=@main -f upgrade-kubernetes-to=v1.37.0
+```
+
 ### Executions and kept testbeds
 
 Executions live in `$XDG_STATE_HOME/wendy/executions/<n>` (`--data` to change the root). An
