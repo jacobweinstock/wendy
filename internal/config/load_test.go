@@ -363,7 +363,8 @@ func TestRenderMirror(t *testing.T) {
 	if err := r.Render(tb, rt, "tinkerbellValues", &values, nil); err != nil {
 		t.Fatal(err)
 	}
-	if smee := values["deployment"].(map[string]any)["envs"].(map[string]any)["smee"].(map[string]any); smee["bootstrapEnabled"] != true {
+	smee := values["deployment"].(map[string]any)["envs"].(map[string]any)["smee"].(map[string]any)
+	if bootstrap, _ := smee["bootstrapEnabled"].(bool); !bootstrap {
 		t.Errorf("smee = %v, want bootstrapEnabled so osieFiles are served", smee)
 	}
 

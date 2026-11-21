@@ -825,7 +825,10 @@ func colName(c string) string { return vocab.Phase(c) }
 // diagnosticKinds are the files collecting diagnostics finds, in the order the
 // failure card links them, with their labels.
 var diagnosticKinds = []struct{ Kind, Label string }{
-	{"workflow", "Workflow"}, {"logs", "Tinkerbell logs"}, {"console", "Console"}, {"bmc", "BMC log"},
+	{"workflow", "Workflow"},
+	{"logs", "Tinkerbell logs"},
+	{"console", "Console"},
+	{"bmc", "BMC log"},
 	{"dump." + engine.ManagementCluster, "Management cluster dump"},
 	{"dump." + engine.TinkerbellCluster, "Tinkerbell cluster dump"},
 	{"dump." + engine.WorkloadCluster, "Workload cluster dump"},
