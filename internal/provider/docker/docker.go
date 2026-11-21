@@ -233,6 +233,33 @@ func IP(ctx context.Context, name, net, family string) (string, error) {
 	return a.String(), nil
 }
 
+// WaitIP is IP once the container has an address, waiting up to timeout. A
+// container that exits as it starts has no address while Docker restarts it.
+// If it never gets one, the error says what state it is in and ends with the
+// last lines of its log.
+func WaitIP(ctx context.Context, name, net, family string, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		ip, err := IP(ctx, name, net, family)
+		if err == nil {
+			return ip, nil
+		}
+		if !time.Now().Before(deadline) {
+			state := "gone"
+			if ins, ok, _ := Inspect(ctx, name); ok && ins.State != nil {
+				state = fmt.Sprintf("%s after %d restart(s), last exit code %d", ins.State.Status, ins.RestartCount, ins.State.ExitCode)
+			}
+			logs, _ := Logs(ctx, name, "20")
+			return "", fmt.Errorf("%w after %s; it is %s:\n%s", err, timeout, state, logs)
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
 // Exec runs a command in a running container and returns its combined
 // output and exit code.
 func Exec(ctx context.Context, name string, cmd ...string) (string, int, error) {

@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/tinkerbell/wendy/internal/engine"
 	"github.com/tinkerbell/wendy/internal/provider/docker"
@@ -14,6 +15,10 @@ const (
 	mirrorPort  = "5000"
 	// caLabel records the CA a mirror's certificate chains to.
 	caLabel = "wendy.mirror.ca"
+	// mirrorStartTimeout bounds the wait for a cache to come up. A cache asks
+	// its upstream for auth challenges as it starts and exits if it cannot
+	// reach it, so a brief network hiccup costs a restart or two.
+	mirrorStartTimeout = 30 * time.Second
 )
 
 // MirrorName is the container caching an upstream, and the DNS name its
@@ -69,7 +74,7 @@ func EnsureMirror(ctx context.Context, data, upstream, net, family string, log f
 	if err := docker.Connect(ctx, net, name); err != nil {
 		return "", err
 	}
-	ip, err := docker.IP(ctx, name, net, family)
+	ip, err := docker.WaitIP(ctx, name, net, family, mirrorStartTimeout)
 	if err != nil {
 		return "", err
 	}
